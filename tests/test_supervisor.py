@@ -59,10 +59,17 @@ def test_aggregate_risk_one_critical():
     from qsmlops.agents.base import Finding, Observation
     obs1 = Observation("agent1", "subj", "QUARANTINE", [Finding("f1", False, "CRITICAL")])
     obs2 = Observation("agent2", "subj", "ACCEPT", [Finding("f2", True, "LOW")])
+
+    # Phase-10 adaptive default: confidence-weighted (conf=0.8 ->
+    # 25*(0.6+0.8*0.4)=23; worst=23, mean=11.5 -> 0.6*23+0.4*11.5 = 18.4)
     risk, per_agent = aggregate_risk([obs1, obs2])
-    # worst=25, mean=12.5 -> 0.6*25 + 0.4*12.5 = 15 + 5 = 20
-    assert risk == 20.0
-    assert per_agent["agent1"] == 25.0
+    assert risk == 18.4
+    assert per_agent["agent1"] == 23.0
+
+    # legacy severity-only semantics remain available and unchanged
+    risk_legacy, per_legacy = aggregate_risk([obs1, obs2], adaptive=False)
+    assert risk_legacy == 20.0
+    assert per_legacy["agent1"] == 25.0
 
 
 def test_supervisor_decision_accept(platform):

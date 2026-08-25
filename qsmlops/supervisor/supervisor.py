@@ -21,6 +21,7 @@ from qsmlops.evidence.ledger import EvidenceLedger
 from qsmlops.evidence.packet import SecurityCheck, VerificationPacket
 from qsmlops.registry.registry import ModelRegistry
 from qsmlops.scores import compute_scores
+from qsmlops.supervisor.validation import sanitise_all
 from qsmlops.supervisor.decisions import (
     Decision,
     DecisionReport,
@@ -113,6 +114,7 @@ class AdaptiveSupervisor:
 
     def collect_observations(self, context: dict) -> list[Observation]:
         observations = []
+        self._last_validation: list[dict] = []
         for agent in self.agents:
             try:
                 obs = agent.observe(context)
@@ -128,7 +130,23 @@ class AdaptiveSupervisor:
                 obs.findings.append(
                     Finding("agent_executed", False, "HIGH", str(exc))
                 )
-            observations.append(obs)
+            # Phase 10 evidence-validation engine (fail-safe sanitisation).
+            clean, report = None, None
+            from qsmlops.supervisor.validation import validate_observation
+            clean, report = validate_observation(obs)
+            self._last_validation.append(report.to_dict())
+            if not report.ok and report.problems:
+                from qsmlops.agents.base import Finding
+
+                clean.findings.append(Finding(
+                    "evidence_validation", False, "HIGH",
+                    detail="; ".join(report.problems[:3]),
+                    observation="observation failed evidence validation",
+                    confidence=1.0, recommendation="ESCALATE",
+                ))
+            observations.append(clean)
+        if not hasattr(self, "_last_validation"):
+            self._last_validation = []
         return observations
 
     # ---------------- Detect + Reason ----------------
@@ -137,7 +155,8 @@ class AdaptiveSupervisor:
     ) -> tuple[DecisionReport, list[Observation]]:
         context = context_override or self.gather_context(version_id)
         observations = self.collect_observations(context)
-        risk, per_agent = aggregate_risk(observations)
+        validation = getattr(self, "_last_validation", [])
+        risk, per_agent = aggregate_risk(observations)  # Phase-10 adaptive
 
         recs = {obs.recommendation for obs in observations}
         model_name = context["version_record"]["model_name"]
@@ -248,6 +267,7 @@ class AdaptiveSupervisor:
             facts=facts,
             policy_decisions=[d.to_dict() for d in policy_decisions],
             scores=scores,
+            validation=list(validation),
         )
         return report, observations
 

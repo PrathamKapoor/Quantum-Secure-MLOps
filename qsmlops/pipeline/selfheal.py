@@ -391,13 +391,11 @@ class SelfHealingMLOps:
             "probe_inputs": [[0.1, -0.2], [0.5, 0.3], [-0.4, 0.6], [1.0, -1.0], [0.0, 0.0]],
         }
         checks: list[tuple[str, bool]] = []
-        obs_objects = []
-        for agent in self.agents:
-            obs = agent.observe(context)
-            obs_objects.append(obs)
-            for f in obs.findings:
+        obs_objects = self.supervisor.collect_observations(context)
+        for o in obs_objects:
+            for f in o.findings:
                 if f.severity in ("CRITICAL", "HIGH"):
-                    checks.append((f"{agent.name}:{f.name}", f.passed))
+                    checks.append((f"{o.agent}:{f.name}", f.passed))
         packet = self.registry.verify_version(version_id, VERIFIER, checks)
         # Phase 5: evidence-based trust evaluation over the same sweep;
         # persisted by the registry and audited in the ledger.

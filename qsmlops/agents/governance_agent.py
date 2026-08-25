@@ -93,15 +93,23 @@ class GovernanceAgent(BaseAgent):
 
         # 5. Phase-5 trust evaluation exists -------------------------------
         latest = self.registry.latest_trust(subject) if hasattr(self.registry, "latest_trust") else None
+        pending_states = {"REGISTERED"}   # trust evaluation happens at verification
+        awaiting_evaluation = state in pending_states
+        required = state in {"APPROVED", "DEPLOYED"}
+        passed = (latest is not None) or awaiting_evaluation or not required
+        severity = "MEDIUM" if (not passed and required) else (
+            "LOW" if awaiting_evaluation else "LOW")
         findings.append(make_finding(
-            "governance_trust_evaluation_present", latest is not None,
-            "MEDIUM",
-            "" if latest else "no persisted trust evaluation for this version",
+            "governance_trust_evaluation_present", passed,
+            severity,
+            "" if latest else ("trust evaluation pending (state "
+                               f"{state or 'unknown'})") ,
             observation=("persisted trust decision available: "
                          f"{latest['trust_decision']}" if latest else
-                         "trust evaluation has not been recorded yet"),
+                         f"trust evaluation pending for state {state or 'unknown'}"),
             evidence=[Evidence("registry.trust", "log",
-                               {"present": latest is not None})],
+                               {"present": latest is not None,
+                                "state": state})],
             confidence=1.0,
             recommendation="EVALUATE_TRUST" if latest is None else "",
         ))
