@@ -239,3 +239,44 @@ agent archetypes (Training Optimization, Incident Response, Governance,
 Optimization) onto BaseAgent with evidence-bearing Observations, register in
 SelfHealingMLOps.agents, extend supervisor facts — no new decision path.
 Do NOT start without owner signal.
+
+
+---
+
+# SESSION ADDENDUM 4 — Phase 9 (Agentic Intelligence Layer)
+
+Entry baseline: 239 passed. Exit: **254 passed** (239 + 15), compileall clean,
+demo SUCCESS.
+
+## Implemented
+Four roadmap archetypes on BaseAgent, observational-only, deterministic:
+training-optimization-agent (metadata completeness / reproducible seed /
+sample adequacy vs features / drift-informed retrain hint),
+incident-response-agent (ledger-tail incident signals incl.
+deployment_denied/approval_denied/escalation/post-verification-failure +
+adverse states + critical drift via drift_-prefixed finding that respects the
+supervisor quarantine exemption), governance-agent (signature vs anchors,
+BOM verified-ratio, security_status completeness, state legality, trust
+evaluation presence), optimization-agent (duplicate artifact reuse, stale
+REGISTERED housekeeping, subject-artifact uniqueness). Registered in
+SelfHealingMLOps.agents → 9 agents total. Supervisor facts auto-extend via
+aggregate_risk per-agent keys (<agent>_risk) — policy-consumable (gate-rule
+test). evaluate_version/health_check contexts now carry version_record and
+resolvable datasets. Static safety test proves agents contain no promotion/
+mutation calls.
+
+## Regression root-caused during development
+Incident agent's critical-drift finding initially bypassed the supervisor's
+drift_* quarantine exemption and flipped a Phase-2 semantic to QUARANTINE;
+renamed drift_critical_ongoing; original decisions restored.
+
+## Files created / modified
+Created: agents ×4 files, tests/test_phase9_agentic_layer.py,
+docs/PHASE_9_IMPLEMENTATION.md. Modified: pipeline/selfheal.py,
+HANDOFF-A.md.
+
+## Phase 10 readiness — exact entry point
+Document PART 14 §14.3 PHASE 10 (Adaptive Supervisor): evidence-validation
+engine hardening, risk-engine refinement, decision-engine expansion on the
+EXISTING supervisor/policy modules. Entry files: qsmlops/supervisor/*. Do NOT
+start without owner signal.
