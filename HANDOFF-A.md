@@ -280,3 +280,51 @@ Document PART 14 §14.3 PHASE 10 (Adaptive Supervisor): evidence-validation
 engine hardening, risk-engine refinement, decision-engine expansion on the
 EXISTING supervisor/policy modules. Entry files: qsmlops/supervisor/*. Do NOT
 start without owner signal.
+
+# SESSION ADDENDUM 5 — Phase 10 (Adaptive Supervisor)
+
+Entry baseline: 254 passed. Exit: **271 passed** (254 + 17), compileall clean,
+demo SUCCESS, REPO-B (guardrailed-product) untouched (git bc835e3, clean).
+
+## Implemented
+Evolution of the EXISTING supervisor — not a rewrite. Three pillars from
+PART 14 §7.7:
+
+1. **Evidence-validation engine** (`supervisor/validation.py`, NEW): fail-safe
+   `validate_observation(obs) -> (clean_obs, ValidationReport)`. Drops findings
+   with invalid severity, clamps confidence to [0,1], collapses duplicate
+   findings, flags evidence lacking a source (finding retained, not trusted),
+   replaces malformed/non-Observation input with a HIGH `malformed_finding`
+   marker. Never raises; always returns (clean, report).
+2. **Confidence-aware adaptive risk** (`supervisor/decisions.py`): legacy
+   `observation_risk` (severity-only, used by `aggregate_risk(adaptive=False)`)
+   preserved verbatim. New `observation_risk_adaptive` = severity_weight ×
+   [0.6 + 0.4·confidence], with `CRITICAL_RISK_FLOOR=20.0` anti-evasion;
+   `aggregate_risk` default is adaptive. Bounded, deterministic, no circular
+   trust, no LLM/RL.
+3. **Explainability**: `DecisionReport.validation` carries per-agent
+   ValidationReport dicts; `to_dict()` exposes full trace (validation list,
+   facts, policy_decisions, scores, rationale). `supervisor.collect_observations`
+   now validates every agent sweep, appends a HIGH `evidence_validation`
+   finding when problems exist, and feeds `reason()` the adaptive aggregate.
+   `SelfHealingMLOps.evaluate_version` routes through the same crash-safe,
+   validated collector (single source of truth).
+
+## Governance hard overrides preserved
+Forged/invalid signature, revoked signer, artifact corruption/mismatch, trust
+BLOCKED/QUARANTINED, SoD violation still hard-fail to QUARANTINE regardless of
+adaptive confidence. drift_* quarantine exemption retained. See
+tests/test_phase10_adaptive_supervisor.py (hard-override matrix + drift
+regression) and docs/PHASE_10_IMPLEMENTATION.md.
+
+## Files created / modified
+Created: tests/test_phase10_adaptive_supervisor.py, docs/PHASE_10_IMPLEMENTATION.md.
+Modified: supervisor/validation.py (NEW semantics), supervisor/decisions.py,
+supervisor/supervisor.py, agents/governance_agent.py (lifecycle-aware
+trust-presence rule so a not-yet-verified REGISTERED version does not emit a
+spurious MEDIUM), pipeline/selfheal.py (collector reuse), tests/test_supervisor.py
+(test updated to assert BOTH legacy (20.0) and adaptive (18.4) semantics — a
+documented spec-driven change, not a regression mask), HANDOFF-A.md.
+
+## Phase 11 readiness — exact entry point
+None. Per directive: STOP after Phase 10. Do NOT start Phase 11 without owner signal.
