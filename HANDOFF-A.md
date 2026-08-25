@@ -108,3 +108,54 @@ signature/key checks behind gates; extend it with environment validation and
 the document's deployment-request flow, wiring promotion eligibility from
 `TrustResult.promotion_eligible`. Reuse `registry.deploy` as the only
 promotion mechanism. Do NOT create a second serving path.
+
+
+---
+
+# SESSION ADDENDUM — Post-separation autonomous session (Phase 6 + Gate-D)
+
+Baseline on entry: 188 passed / compile clean / demo OK (post-separation).
+State at exit: **208 passed** (188 prior + 4 keystore-remediation + 16 Phase-6),
+compileall clean, demo SUCCESS, CLI smokes green.
+
+## Security remediation (authorized prerequisite)
+`QSMLOPS_KEYSTORE_PASSPHRASE` now routes the platform through
+EncryptedKeyStore (vault; legacy plaintext auto-migrated then deleted).
+Unset ⇒ legacy dev behavior unchanged. Tests:
+tests/test_keystore_remediation.py. NOTE: existing `~/.qsmlops/keys/secret_keys.json`
+migrates automatically the first time an operator sets the variable.
+
+## Phase 6 (COMPLETE within scope)
+Governed deployment-request flow wired end-to-end: pipeline delegates →
+DeploymentService validates identity/state/crypto/trust(promotion_eligible)/
+environment/policy → registry.deploy() promotes (sole mechanism) → serving-gate
+post-verification → ledger evidence. API: POST /deployment/request,
+GET /deployment/status/{model}, GET /deployment/validation/{vid},
+POST /deployment/rollback/{model}. CLI: request-deployment /
+validate-deployment / deployment-status. Repairs to interrupted-session code:
+_resolve_version restored, dead code removed, unknown-version denial audited.
+
+## Files created
+docs/PHASE_6_IMPLEMENTATION.md · tests/test_keystore_remediation.py ·
+tests/test_phase6_deployment_flow.py
+
+## Files modified
+qsmlops/config.py (keystore_passphrase) · qsmlops/crypto n/a (mechanism existed) ·
+qsmlops/serving/deployment.py (repairs) · qsmlops/pipeline/selfheal.py (keystore
+selection + deployments service + delegates) · qsmlops/api/app.py (4 routes) ·
+qsmlops/cli.py (3 commands) · HANDOFF-A.md (this addendum)
+
+## Known limitations / residue
+- Smoke-test residue in default runtime home `~/.smlops`: one REGISTERED model
+  ("sm"/"x" from a mis-env'd smoke run). Harmless, ledger-consistent; remove via
+  registry revoke if undesired.
+- Frontend build failure in Guardrailed repo is pre-existing and out of scope.
+- KEM/hybrid encryption still implemented-but-disconnected (pre-existing).
+
+## Phase 7 readiness — exact entry point
+Per document PART 14 §14.3 PHASE 7 / STAGE 7 (Monitoring & Observability):
+telemetry collector + metrics store + alerting on top of existing drift engine
+(`ml/drift.py`) and ledger telemetry (`serving` inference records). Entry files:
+`qsmlops/ml/drift.py`, `qsmlops/api/app.py` (metrics surface), new
+`qsmlops/monitoring/` module inside qsmlops (name free — root corpse dir is
+archived under _archive/). Do NOT resurrect archived modules.
