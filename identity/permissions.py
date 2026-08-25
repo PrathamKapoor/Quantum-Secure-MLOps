@@ -1,0 +1,2 @@
+'''Permission structures for the IAM layer.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import List\n\n\n@dataclass\nclass Permission:\n    resource: str  # e.g., 'model', 'deployment', 'agent'\n    action: str    # e.g., 'read', 'write', 'execute'\n\n\n@dataclass\nclass PermissionSet:\n    permissions: List[Permission]\n\n    def allows(self, resource: str, action: str) -> bool:\n        return any(p.resource == resource and p.action == action for p in self.permissions)\n

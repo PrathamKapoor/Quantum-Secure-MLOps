@@ -1,0 +1,2 @@
+'''Integrity verification placeholder service.'''
+\nfrom __future__ import annotations\n\n\nclass IntegrityService:\n    def check_hash(self, data: bytes, expected_hash: str) -> bool:\n        raise NotImplementedError\n

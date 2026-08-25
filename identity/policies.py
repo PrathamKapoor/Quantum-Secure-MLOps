@@ -1,0 +1,3 @@
+'''Access policy definitions for IAM.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass, field\nfrom typing import List\n\n\n@dataclass\nclass AccessPolicy:\n    name: str\n    description: str = ""
+    allowed_permissions: List[str] = field(default_factory=list)  # list of permission identifiers\n\n    def is_allowed(self, permission_id: str) -> bool:\n        return permission_id in self.allowed_permissions\n

@@ -1,0 +1,2 @@
+'''Enumeration of workflow states.'''
+\nfrom __future__ import annotations\n\nfrom enum import Enum, auto\n\n\nclass WorkflowState(Enum):\n    CREATED = auto()\n    VALIDATING = auto()\n    RUNNING = auto()\n    WAITING_APPROVAL = auto()\n    EXECUTING = auto()\n    VERIFYING = auto()\n    COMPLETED = auto()\n    FAILED = auto()\n    ROLLED_BACK = auto()\n

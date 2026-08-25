@@ -1,0 +1,2 @@
+'''Trusted artifact contract.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass, field\nfrom typing import Any, Dict\n\n\n@dataclass\nclass TrustedArtifact:\n    artifact_digest: str\n    identity_ref: str  # reference to an Identity record\n    hash_algorithm: str = "sha3-256"\n    signature: bytes | None = None\n    encryption_state: str | None = None  # e.g., 'encrypted' or None\n    provenance: Dict[str, Any] = field(default_factory=dict)\n    verification_history: list[Dict[str, Any]] = field(default_factory=list)\n

@@ -1,0 +1,2 @@
+'''Workflow execution state holder.'''
+\nfrom __future__ import annotations\n\nimport uuid\nfrom typing import Any, Dict\n\nfrom .states import WorkflowState\n\n\nclass WorkflowExecution:\n    def __init__(self, definition: Dict[str, Any]):\n        self.id: str = uuid.uuid4().hex\n        self.definition = definition\n        self.state: WorkflowState = WorkflowState.CREATED\n        self.context: Dict[str, Any] = {}\n\n    def transition_to(self, new_state: WorkflowState) -> None:\n        self.state = new_state\n

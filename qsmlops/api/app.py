@@ -1,0 +1,324 @@
+"""Dashboard API backend.
+
+Routes:
+    GET  /models, /models/{name}     — registry inventory and per-model detail
+    GET  /models/{name}/compare      — artifact/version comparison
+    GET  /registry                   — lifecycle state machine overview
+    GET  /registry/models            — all versions with persisted trust state
+    GET  /registry/versions/{vid}    — version record + latest trust evaluation
+    GET  /registry/trust/{vid}       — latest explainable trust report
+    POST /registry/trust/{vid}       — request a (re)evaluation of trust
+    POST /registry/approve/{vid}     — governed approval via the trust gate
+    POST /registry/revoke/{vid}      — revoke a version (audited)
+    GET  /verification/{version_id}  — run the five agents on a version
+    GET  /agents                     — agent roster + findings from last sweep
+    GET  /security                   — keys, suites, crypto posture
+    GET  /health                     — platform liveness + ledger integrity
+    GET  /incidents                  — quarantines, rollbacks, escalations,
+                                        trust evaluations, approval denials
+    GET  /dashboard                  — dashboard summary document
+
+Read routes never mutate platform state. The Phase 5 mutation routes
+(/registry/trust, /registry/approve, /registry/revoke) delegate entirely to
+the governed pipeline/registry code paths — the API never touches registry
+state directly, so policy, separation of duties and evidence apply equally.
+"""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from qsmlops.pipeline.selfheal import SelfHealingMLOps
+from qsmlops.registry.registry import ACTIVE_STATES, RegistryError
+from qsmlops.scores import compute_scores
+
+
+class ApproveRequest(BaseModel):
+    approver: str
+
+
+class RevokeRequest(BaseModel):
+    reason: str = ""
+    actor: str = "api"
+
+
+class TrustRefreshRequest(BaseModel):
+    actor: str = "api"
+
+
+def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
+    """Attach the dashboard routes to an existing FastAPI application."""
+    _last_sweep: dict[str, Any] = {}
+
+    def _require_version(version_id: str) -> dict:
+        try:
+            return pipeline.registry.get_version(version_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown version {version_id}")
+
+    # ---------------- models ----------------
+    @app.get("/models")
+    def models() -> dict:
+        versions = pipeline.registry.list_versions()
+        by_name: dict[str, list] = {}
+        for v in versions:
+            by_name.setdefault(v["model_name"], []).append(v)
+        return {"models": [
+            {"name": name, "versions": [
+                {"version_id": v["version_id"], "version": v["version"], "state": v["state"],
+                 "suite": v["suite_id"], "registered_at": v["registered_at"]}
+                for v in rows], "active_deployment": pipeline.registry.active_deployment(name)}
+            for name, rows in sorted(by_name.items())
+        ]}
+
+    @app.get("/models/{name}")
+    def model_detail(name: str) -> dict:
+        versions = pipeline.registry.list_versions(name)
+        if not versions:
+            raise HTTPException(status_code=404, detail=f"unknown model {name}")
+        return {"name": name, "versions": versions,
+                "active_deployment": pipeline.registry.active_deployment(name)}
+
+    @app.get("/models/{name}/compare")
+    def compare(name: str, a: str, b: str) -> dict:
+        _require_version(a); _require_version(b)
+        return pipeline.registry.compare_versions(a, b)
+
+    # ---------------- registry ----------------
+    @app.get("/registry")
+    def registry() -> dict:
+        versions = pipeline.registry.list_versions()
+        states: dict[str, int] = {}
+        for v in versions:
+            states[v["state"]] = states.get(v["state"], 0) + 1
+        return {"state_counts": states, "total_versions": len(versions),
+                "active_states": sorted(ACTIVE_STATES),
+                "deployments": [d for d in (
+                    pipeline.registry.active_deployment(m["model_name"])
+                    for m in {v["model_name"]: v for v in versions}.values()) if d]}
+
+    # ---------------- registry (Phase 5) ----------------
+    @app.get("/registry/models")
+    def registry_models() -> dict:
+        versions = pipeline.registry.list_versions()
+        return {"models": [
+            {
+                "version_id": v["version_id"],
+                "model_name": v["model_name"],
+                "version": v["version"],
+                "state": v["state"],
+                "suite": v["suite_id"],
+                "trust_score": v.get("trust_score"),
+                "trust_decision": v.get("trust_decision"),
+            }
+            for v in versions
+        ]}
+
+    @app.get("/registry/versions/{version_id}")
+    def registry_version(version_id: str) -> dict:
+        _require_version(version_id)
+        rec = pipeline.registry.get_version(version_id)
+        rec.pop("trust_report", None)
+        latest = pipeline.registry.latest_trust(version_id)
+        active = pipeline.registry.active_deployment(rec["model_name"])
+        return {
+            "version": rec,
+            "trust": latest,
+            "is_active_deployment": bool(active and active["version_id"] == version_id),
+        }
+
+    @app.get("/registry/trust/{version_id}")
+    def registry_trust(version_id: str) -> dict:
+        _require_version(version_id)
+        latest = pipeline.registry.latest_trust(version_id)
+        if latest is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no trust evaluation recorded for {version_id}; POST to re-evaluate",
+            )
+        return latest
+
+    @app.post("/registry/trust/{version_id}")
+    def registry_trust_refresh(version_id: str, body: TrustRefreshRequest | None = None) -> dict:
+        _require_version(version_id)
+        actor = body.actor if body else "api"
+        observations = pipeline.last_observations.get(
+            pipeline.registry.get_version(version_id)["model_name"], []
+        )
+        result = pipeline.registry.trust_evaluation(
+            version_id,
+            observations=[_rebuild(o) for o in observations] if observations else None,
+            actor=actor or "api",
+        )
+        return result.to_dict()
+
+    @app.post("/registry/approve/{version_id}")
+    def registry_approve(version_id: str, body: ApproveRequest) -> dict:
+        _require_version(version_id)
+        try:
+            approval = pipeline.request_approval(version_id, body.approver)
+        except (RuntimeError, RegistryError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return approval
+
+    @app.post("/registry/revoke/{version_id}")
+    def registry_revoke(version_id: str, body: RevokeRequest) -> dict:
+        _require_version(version_id)
+        pipeline.registry.revoke(version_id, body.actor, body.reason)
+        return {
+            "version_id": version_id,
+            "state": pipeline.registry.get_version(version_id)["state"],
+            "revoked_by": body.actor,
+            "reason": body.reason,
+        }
+
+    # ---------------- verification ----------------
+    @app.get("/verification/{version_id}")
+    def verification(version_id: str) -> dict:
+        _require_version(version_id)
+        result = pipeline.evaluate_version(version_id)
+        _last_sweep["version_id"] = version_id
+        _last_sweep["result"] = result
+        return result
+
+    # ---------------- agents ----------------
+    @app.get("/agents")
+    def agents() -> dict:
+        roster = [{"name": a.name, "class": type(a).__name__} for a in pipeline.agents]
+        findings = []
+        if _last_sweep.get("result"):
+            for obs in _last_sweep["result"]["observations"]:
+                for f in obs["findings"]:
+                    findings.append({"agent": obs["agent"], **f})
+        elif pipeline.registry.list_versions():
+            latest = pipeline.registry.list_versions()[-1]
+            result = pipeline.evaluate_version(latest["version_id"])
+            _last_sweep.update({"version_id": latest["version_id"], "result": result})
+            for obs in result["observations"]:
+                for f in obs["findings"]:
+                    findings.append({"agent": obs["agent"], **f})
+        return {"agents": roster, "findings": findings,
+                "last_sweep_version": _last_sweep.get("version_id")}
+
+    # ---------------- security ----------------
+    @app.get("/security")
+    def security() -> dict:
+        keys = pipeline.keystore.list_records(include_inactive=True)
+        suites = pipeline.agility.audit_inventory({
+            v["suite_id"]: 1 for v in pipeline.registry.list_versions()
+        }) if pipeline.registry.list_versions() else {}
+        return {
+            "keys": [
+                {"key_id": r.key_id, "role": r.role, "algorithm": r.algorithm_id,
+                 "version": r.version, "status": r.status, "owner": r.owner,
+                 "age_days": round(r.age_days, 1),
+                 "expires_at": r.expires_at,
+                 "expired": r.is_expired()}
+                for r in keys
+            ],
+            "suite_inventory": suites,
+            "default_suite": pipeline.agility.default_suite,
+        }
+
+    # ---------------- health ----------------
+    @app.get("/health")
+    def health() -> dict:
+        ok, msg = pipeline.ledger.verify_chain()
+        versions = pipeline.registry.list_versions()
+        return {"status": "ok" if ok else "ledger_broken",
+                "ledger": {"chain_ok": ok, "message": msg, "head": pipeline.ledger.head()},
+                "versions": len(versions),
+                "learner": pipeline.learner.summary()}
+
+    # ---------------- incidents ----------------
+    @app.get("/incidents")
+    def incidents() -> dict:
+        interesting = {
+            "state_transition",
+            "escalation",
+            "verification_packet",
+            "trust_evaluation",
+            "approval_denied",
+        }
+        events = []
+        for entry in pipeline.ledger.iter_entries():
+            record = entry.get("record", {})
+            rtype = record.get("type", "")
+            if rtype not in interesting:
+                continue
+            decision = record.get("decision", record.get("to", ""))
+            if rtype == "state_transition" and record.get("to") in ("REGISTERED", "VERIFIED"):
+                continue
+            events.append({
+                "seq": entry["seq"], "at": entry["timestamp"], "type": rtype,
+                "model": record.get("model", ""), "decision": decision,
+                "reason": record.get("reason", record.get("objective", "")),
+            })
+        events.reverse()
+        return {"incidents": events, "count": len(events)}
+
+    # ---------------- dashboard summary ----------------
+    @app.get("/dashboard")
+    def dashboard() -> dict:
+        versions = pipeline.registry.list_versions()
+        models = sorted({v["model_name"] for v in versions})
+        active_deployments = []
+        per_model = []
+        for name in models:
+            active = pipeline.registry.active_deployment(name)
+            if active:
+                active_deployments.append({
+                    "model": name, "version_id": active["version_id"],
+                    "version": active["version"], "deployed_at": active["deployed_at"],
+                })
+            latest = [v for v in versions if v["model_name"] == name][-1]
+            obs = pipeline.last_observations.get(name, [])
+            scores = {"security_score": None, "trust_score": None}
+            drift = pipeline.last_drift_status.get(name, {"status": "NO_DATA", "max_severity": "NONE"})
+            if obs:
+                computed = compute_scores([_rebuild(o) for o in obs])
+                scores = computed
+            per_model.append({"model": name, "latest_state": latest["state"],
+                              "scores": scores, "drift": drift,
+                              "consecutive_failures": pipeline.learner.consecutive_failures(name)})
+        agent_findings = [
+            {"model": name, "agent": o["agent"], "name": f["name"], "passed": f["passed"],
+             "severity": f["severity"], "risk": f.get("risk", ""),
+             "recommendation": f.get("recommendation", "")}
+            for name in models for o in pipeline.last_observations.get(name, [])
+            for f in o["findings"]
+        ]
+        supervisor_actions = [
+            {"model": o.get("model"), "decision": o["decision"], "success": o["success"],
+             "detail": o["detail"], "at": o["at"]}
+            for o in pipeline.learner._state.get("outcomes", [])[-20:]
+        ]
+        ok, msg = pipeline.ledger.verify_chain()
+        return {
+            "models": per_model,
+            "active_deployments": active_deployments,
+            "drift_status": {"monitored_models": len(models),
+                             "per_model": {name: pipeline.last_drift_status.get(
+                                 name, {"status": "NO_DATA"}) for name in models}},
+            "agent_findings": agent_findings,
+            "supervisor_actions": supervisor_actions,
+            "ledger_ok": ok,
+        }
+
+    def _rebuild(o: dict):
+        from qsmlops.agents.base import Finding, Observation
+
+        obs = Observation(agent=o["agent"], subject_id=o.get("subject_id", ""),
+                          recommendation=o.get("recommendation", ""))
+        obs.findings = [Finding.from_dict(f) for f in o.get("findings", [])]
+        return obs
+
+
+def create_app(pipeline: SelfHealingMLOps) -> FastAPI:
+    """Standalone dashboard app (kept for backward compatibility)."""
+    app = FastAPI(title="qsmlops dashboard", version="0.2.0")
+    register_dashboard_routes(app, pipeline)
+    return app

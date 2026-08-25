@@ -1,0 +1,2 @@
+'''Event schema definitions.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any\n\n\n@dataclass\nclass EventSchema:\n    name: str\n    payload_type: type\n
