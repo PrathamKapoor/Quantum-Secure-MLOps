@@ -159,3 +159,38 @@ telemetry collector + metrics store + alerting on top of existing drift engine
 `qsmlops/ml/drift.py`, `qsmlops/api/app.py` (metrics surface), new
 `qsmlops/monitoring/` module inside qsmlops (name free — root corpse dir is
 archived under _archive/). Do NOT resurrect archived modules.
+
+
+---
+
+# SESSION ADDENDUM 2 — Phase 7 (Monitoring & Observability Foundation)
+
+Entry baseline: 208 passed / compile clean / demo OK.
+Exit state: **221 passed** (208 + 13 monitoring), compileall clean, demo SUCCESS.
+
+## Implemented
+qsmlops/monitoring/{collector,alerts}.py — TelemetryCollector (JSONL at
+<home>/monitoring/telemetry.jsonl; record/series/latest/summary/drift_history)
++ deterministic alert rules (performance thresholds, drift severity mapping,
+trust-decision alerts) with worst_level. health_check() now persists telemetry
+and returns outcome["alerts"]/["alert_level"]. API: GET /metrics/{model},
+GET /alerts/{model}. PlatformConfig.telemetry_path added.
+
+## Files created
+qsmlops/monitoring/{__init__,collector,alerts}.py ·
+tests/test_phase7_monitoring.py · docs/PHASE_7_IMPLEMENTATION.md
+
+## Files modified
+qsmlops/config.py · qsmlops/pipeline/selfheal.py · qsmlops/api/app.py ·
+HANDOFF-A.md
+
+## Known limitations
+Tier-3 JSONL store (single host); no retention policy; stateless alerts (no
+ack/suppression); inference latency not instrumented yet.
+
+## Phase 8 readiness — exact entry point
+Document PART 14 §14.3 PHASE 8 (Advanced Drift Intelligence): deepen
+ml/drift.py consumers — per-feature drift attribution surfaced through the
+new telemetry/alerts stack, rolling-window performance drift baselines fed
+from TelemetryCollector.summary(), and DriftReports persisted via
+telemetry.record_drift (already wired). Do NOT start without owner signal.

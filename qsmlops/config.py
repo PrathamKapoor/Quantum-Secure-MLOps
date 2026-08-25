@@ -37,6 +37,10 @@ class PlatformConfig:
         return self.root / "platform" / "platform.sqlite3"
 
     @property
+    def telemetry_path(self) -> Path:
+        return self.root / "monitoring" / "telemetry.jsonl"
+
+    @property
     def learning_path(self) -> Path:
         return self.root / "supervisor" / "learning.json"
 
@@ -59,6 +63,7 @@ class PlatformConfig:
             self.ledger_path.parent,
             self.registry_path.parent,
             self.learning_path.parent,
+            (self.root / "monitoring"),
         ):
             p.mkdir(parents=True, exist_ok=True)
 

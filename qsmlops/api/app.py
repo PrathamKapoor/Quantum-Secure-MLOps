@@ -188,6 +188,49 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
             "reason": body.reason,
         }
 
+    # ---------------- monitoring (Phase 7) ----------------
+    @app.get("/metrics/{model_name}")
+    def metrics_summary(model_name: str) -> dict:
+        versions = [v["version_id"] for v in pipeline.registry.list_versions(model_name)]
+        if not versions:
+            raise HTTPException(status_code=404, detail=f"unknown model {model_name}")
+        merged: dict[str, dict] = {}
+        # telemetry rows are keyed by model name (stable operator handle);
+        # also fold in any per-version rows for completeness
+        for key in [model_name, *versions]:
+            for name, stats in pipeline.telemetry.summary(key).items():
+                cur = merged.setdefault(name, {"count": 0, "last": None,
+                                               "min": None, "max": None})
+                cur["count"] += stats["count"]
+                cur["last"] = stats["last"]
+                cur["min"] = stats["min"] if cur["min"] is None else min(cur["min"], stats["min"])
+                cur["max"] = stats["max"] if cur["max"] is None else max(cur["max"], stats["max"])
+        drift = ([e for e in pipeline.telemetry.drift_history(model_name)]
+                 + [e for v in versions for e in pipeline.telemetry.drift_history(v)])[-20:]
+        return {"model": model_name, "metrics": merged,
+                "drift_history": drift[-20:]}
+
+    @app.get("/alerts/{model_name}")
+    def alerts_for(model_name: str) -> dict:
+        from qsmlops.monitoring.alerts import evaluate as evaluate_alerts
+
+        versions = [v["version_id"] for v in pipeline.registry.list_versions(model_name)]
+        if not versions:
+            raise HTTPException(status_code=404, detail=f"unknown model {model_name}")
+        active = pipeline.registry.active_deployment(model_name)
+        metrics = {}
+        latest_metrics = pipeline.telemetry.summary(model_name) or (
+            pipeline.telemetry.summary(active["version_id"]) if active else {})
+        metrics = {k: v["last"] for k, v in latest_metrics.items()}
+        alerts = evaluate_alerts(
+            model_name,
+            metrics=metrics or None,
+            trust_decision=(pipeline.registry.get_version(versions[-1])["state"] == "QUARANTINED"
+                            and "QUARANTINED") or None,
+        )
+        return {"model": model_name, "alerts": [a.to_dict() for a in alerts],
+                "count": len(alerts)}
+
     # ---------------- deployment (Phase 6) ----------------
     @app.post("/deployment/request")
     def deployment_request(body: DeploymentRequestBody) -> dict:

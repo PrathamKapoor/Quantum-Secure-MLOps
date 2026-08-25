@@ -38,6 +38,8 @@ from qsmlops.pipeline.training import (
 )
 from qsmlops.passport.passport import new_passport
 from qsmlops.registry.registry import ModelRegistry
+from qsmlops.monitoring.alerts import evaluate as evaluate_alerts, worst_level
+from qsmlops.monitoring.collector import TelemetryCollector
 from qsmlops.serving.deployment import DeploymentService
 from qsmlops.supervisor.decisions import Decision
 from qsmlops.supervisor.learning import LearningStore
@@ -104,6 +106,8 @@ class SelfHealingMLOps:
         # eligibility, environment compatibility, policy) and then delegates
         # promotion to the registry.
         self.deployments = DeploymentService(self.registry)
+        # Phase 7: monitoring foundation — persistent telemetry + alert rules.
+        self.telemetry = TelemetryCollector(self.config.telemetry_path)
 
     def request_deployment(
         self,
@@ -493,6 +497,20 @@ class SelfHealingMLOps:
         }
         outcome = self.supervisor.run_cycle(version_id, context_override=context)
         outcome["observed_metrics"] = metrics
+        # Phase 7: record telemetry + evaluate monitoring alerts.
+        self.telemetry.record_model_health(model_name, metrics)
+        if drift_summary:
+            self.telemetry.record_drift(model_name, drift_summary)
+        alerts = evaluate_alerts(
+            model_name,
+            metrics=metrics,
+            drift_summary=drift_summary,
+            trust_decision=outcome["report"]["decision"].value
+            if hasattr(outcome["report"]["decision"], "value")
+            else str(outcome["report"]["decision"]),
+        )
+        outcome["alerts"] = [a.to_dict() for a in alerts]
+        outcome["alert_level"] = worst_level(alerts)
         if drift_summary:
             outcome["drift_summary"] = drift_summary
         self.last_observations[model_name] = outcome["report"]["observations"]
