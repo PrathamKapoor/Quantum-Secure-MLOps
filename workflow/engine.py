@@ -1,8 +1,0 @@
-'''Core workflow execution engine.'''
-\nfrom __future__ import annotations\n\nfrom typing import Any, Dict\n\nfrom .states import WorkflowState\nfrom .execution import WorkflowExecution\n\n\nclass WorkflowEngine:\n    def __init__(self) -> None:\n        self._executions: Dict[str, WorkflowExecution] = {}
-\n    def start(self, definition: Dict[str, Any]) -> str:\n        """Create a new workflow execution from a definition and return its ID."""
-        execution = WorkflowExecution(definition)
-        exec_id = execution.id\n        self._executions[exec_id] = execution
-        execution.transition_to(WorkflowState.CREATED)
-        return exec_id\n\n    def get_status(self, exec_id: str) -> WorkflowState:\n        return self._executions[exec_id].state\n\n    def advance(self, exec_id: str) -> None:\n        """Advance the workflow one step – placeholder implementation."""
-        execution = self._executions[exec_id]\n        # simplistic state progression for demonstration\n        next_state_map = {\n            WorkflowState.CREATED: WorkflowState.VALIDATING,\n            WorkflowState.VALIDATING: WorkflowState.RUNNING,\n            WorkflowState.RUNNING: WorkflowState.WAITING_APPROVAL,\n            WorkflowState.WAITING_APPROVAL: WorkflowState.EXECUTING,\n            WorkflowState.EXECUTING: WorkflowState.VERIFYING,\n            WorkflowState.VERIFYING: WorkflowState.COMPLETED,\n        }\n        execution.transition_to(next_state_map.get(execution.state, WorkflowState.COMPLETED))\n

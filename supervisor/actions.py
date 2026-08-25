@@ -1,3 +1,0 @@
-'''Supervisor action handler placeholders.'''
-\nfrom __future__ import annotations\n\nfrom qsmlops.supervisor.decisions import Decision\n\n# In a full system each decision would have a concrete handler. Here we expose a registry.
-\nACTION_HANDLERS = {}\n\n\ndef register_action(decision: Decision):\n    def decorator(fn):\n        ACTION_HANDLERS[decision] = fn\n        return fn\n    return decorator\n

@@ -7,12 +7,6 @@ import pytest
 
 pytest_plugins = []
 
-# `tests/product/` is owned by the separate productization workstream. Its
-# test basenames collide with core suite modules under pytest's default
-# import mode (e.g. test_agents.py), which breaks core collection, and its
-# contents change outside this project's phase lifecycle. Exclude it from
-# the CORE suite; run it explicitly via `pytest tests/product` if needed.
-collect_ignore_glob = ["product/*"]
 
 
 @pytest.fixture()

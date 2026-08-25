@@ -1,2 +1,0 @@
-'''Signature service interface placeholder.'''
-\nfrom __future__ import annotations\n\n\nclass SignatureService:\n    def sign(self, data: bytes, key_id: str) -> bytes:\n        raise NotImplementedError\n\n    def verify(self, data: bytes, signature: bytes, key_id: str) -> bool:\n        raise NotImplementedError\n
