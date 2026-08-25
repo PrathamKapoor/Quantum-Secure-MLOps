@@ -308,3 +308,114 @@ class DriftDetectionEngine:
             "by_type": {r.drift_type: len([x for x in reports if x.drift_type == r.drift_type]) for r in reports},
             "recommendations": list(set(r.recommendation for r in reports))
         }
+
+# ----------------------------------------------------------------------
+# Phase 8: feature attribution + drift intelligence
+# ----------------------------------------------------------------------
+
+_SEVERITY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+
+def build_feature_attribution(
+    reports: list[DriftReport],
+    reference_data=None,
+    current_data=None,
+    feature_names: Optional[list[str]] = None,
+) -> list[dict]:
+    """Attribute drift to individual features from existing detector output.
+
+    Every detector report is already per-feature; this merges them into one
+    attribution row per feature, ranked by severity then score. Baseline and
+    current distribution statistics are computed from the actual arrays when
+    the caller supplies them; otherwise they are reported as UNAVAILABLE
+    rather than fabricated.
+    """
+    merged: dict[str, dict] = {}
+    for r in reports:
+        if not r.affected_features:
+            continue
+        feature = r.affected_features[0]
+        row = merged.setdefault(feature, {
+            "feature": feature,
+            "detectors": [],
+            "severity": "LOW",
+            "score": 0.0,
+            "threshold": r.threshold,
+            "statistics": {},
+            "sample_counts": {},
+        })
+        row["detectors"].append(r.drift_type)
+        if _SEVERITY_ORDER.get(r.severity, 0) > _SEVERITY_ORDER.get(row["severity"], 0):
+            row["severity"] = r.severity
+        if abs(r.score) > abs(row["score"]):
+            row["score"] = r.score
+        row["statistics"].update({
+            k: v for k, v in r.evidence.items() if isinstance(v, (int, float, str))
+        })
+
+    # real distribution statistics where the caller supplied arrays
+    if reference_data is not None and current_data is not None:
+        import numpy as _np
+
+        names = feature_names or []
+        for feature, row in merged.items():
+            idx = None
+            if feature in names:
+                idx = names.index(feature)
+            elif feature.startswith("feature_"):
+                try:
+                    idx = int(feature.split("_")[1])
+                except ValueError:
+                    idx = None
+            if idx is None or idx >= reference_data.shape[1]:
+                row["statistics"]["baseline_mean"] = "UNAVAILABLE"
+                row["statistics"]["current_mean"] = "UNAVAILABLE"
+                continue
+            ref_col = _np.asarray(reference_data[:, idx], dtype=float)
+            cur_col = _np.asarray(current_data[:, idx], dtype=float)
+            row["statistics"]["baseline_mean"] = round(float(_np.mean(ref_col)), 6)
+            row["statistics"]["current_mean"] = round(float(_np.mean(cur_col)), 6)
+            row["sample_counts"] = {
+                "reference": int(ref_col.size), "current": int(cur_col.size),
+            }
+
+    rows = sorted(
+        merged.values(),
+        key=lambda r: (-_SEVERITY_ORDER.get(r["severity"], 0), -abs(float(r["score"]))),
+    )
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
+    return rows
+
+
+def classify_drift(
+    *,
+    attributions: list[dict],
+    total_features: int,
+    performance_degraded: bool = False,
+    history_count: int | None = None,
+    min_history: int = 3,
+    broad_fraction: float = 0.5,
+) -> str:
+    """Deterministic interpretation of drift evidence (no heuristics beyond
+    documented thresholds). Returns exactly one of:
+
+        NO_DRIFT | ISOLATED_FEATURE_DRIFT | BROAD_FEATURE_DRIFT |
+        PERFORMANCE_DEGRADATION | DRIFT_WITH_PERFORMANCE_DEGRADATION |
+        INSUFFICIENT_HISTORY
+    """
+    insufficient = history_count is not None and history_count < min_history
+    features_drifting = sorted({a["feature"] for a in attributions})
+
+    if not features_drifting:
+        if insufficient and not performance_degraded:
+            return "INSUFFICIENT_HISTORY"
+        return "PERFORMANCE_DEGRADATION" if performance_degraded else (
+            "INSUFFICIENT_HISTORY" if insufficient else "NO_DRIFT")
+
+    broad_cutoff = max(2, int(round(broad_fraction * max(1, total_features))))
+    broad = len(features_drifting) >= broad_cutoff
+
+    if performance_degraded:
+        return "DRIFT_WITH_PERFORMANCE_DEGRADATION"
+    return "BROAD_FEATURE_DRIFT" if broad else "ISOLATED_FEATURE_DRIFT"

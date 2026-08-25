@@ -501,6 +501,20 @@ class SelfHealingMLOps:
         self.telemetry.record_model_health(model_name, metrics)
         if drift_summary:
             self.telemetry.record_drift(model_name, drift_summary)
+        # Phase 8: persist per-feature attribution + rolling baselines.
+        from qsmlops.config import MONITORING_ROLLING_WINDOW, MONITORING_MIN_HISTORY
+
+        attribution = (drift_summary or {}).get("feature_attribution") or []
+        if attribution:
+            self.telemetry.record_feature_attribution(model_name, attribution)
+        rolling_baselines = [
+            self.telemetry.rolling_baseline(
+                model_name, metric,
+                window=MONITORING_ROLLING_WINDOW,
+                min_history=MONITORING_MIN_HISTORY,
+            )
+            for metric in ("mse", "r2")
+        ]
         alerts = evaluate_alerts(
             model_name,
             metrics=metrics,
@@ -508,9 +522,16 @@ class SelfHealingMLOps:
             trust_decision=outcome["report"]["decision"].value
             if hasattr(outcome["report"]["decision"], "value")
             else str(outcome["report"]["decision"]),
+            feature_attributions=attribution or None,
+            rolling_baselines=[rb for rb in rolling_baselines if rb.get("sufficient")] or None,
         )
         outcome["alerts"] = [a.to_dict() for a in alerts]
         outcome["alert_level"] = worst_level(alerts)
+        outcome["feature_attribution"] = attribution
+        outcome["rolling_baseline"] = {
+            rb["metric"]: rb for rb in rolling_baselines
+        }
+        outcome["drift_intelligence"] = (drift_summary or {}).get("intelligence")
         if drift_summary:
             outcome["drift_summary"] = drift_summary
         self.last_observations[model_name] = outcome["report"]["observations"]
@@ -542,6 +563,25 @@ class SelfHealingMLOps:
         reports = engine.detect_all(cur, current_predictions=cur_preds,
                                     current_metrics=dict(passport.metrics))
         summary = engine.get_summary(reports)
+        # Phase 8: per-feature attribution + deterministic interpretation.
+        from qsmlops.ml.drift import build_feature_attribution, classify_drift
+        from qsmlops.config import (MONITORING_MIN_HISTORY,
+                                    DRIFT_BROAD_FEATURE_FRACTION)
+        attribution = build_feature_attribution(
+            reports, reference_data=ref, current_data=cur,
+            feature_names=list(ds.feature_names),
+        )
+        history_count = len(self.telemetry.drift_history(model_name))
+        summary["feature_attribution"] = attribution
+        summary["intelligence"] = classify_drift(
+            attributions=attribution,
+            total_features=len(ds.feature_names),
+            performance_degraded=bool(summary.get("status") == "DRIFT_DETECTED"
+                                      and "performance_drift" in summary.get("by_type", {})),
+            history_count=history_count,
+            min_history=MONITORING_MIN_HISTORY,
+            broad_fraction=DRIFT_BROAD_FEATURE_FRACTION,
+        )
         self.ledger.append({
             "type": "drift_check", "model": model_name,
             "version_id": active["version_id"], "summary": summary,

@@ -210,6 +210,25 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
         return {"model": model_name, "metrics": merged,
                 "drift_history": drift[-20:]}
 
+    @app.get("/drift/{model_name}/attribution")
+    def drift_attribution(model_name: str) -> dict:
+        """Latest per-feature drift attribution, ranked by severity/score."""
+        rows = pipeline.telemetry.latest_feature_attribution(model_name)
+        return {"model": model_name,
+                "features": [r["detail"] for r in rows], "count": len(rows)}
+
+    @app.get("/performance/{model_name}/rolling")
+    def performance_rolling(model_name: str, window: int = 10) -> dict:
+        """Rolling performance baselines from recorded telemetry."""
+        from qsmlops.config import MONITORING_MIN_HISTORY
+
+        baselines = {
+            metric: pipeline.telemetry.rolling_baseline(
+                model_name, metric, window=window, min_history=MONITORING_MIN_HISTORY)
+            for metric in ("mse", "r2")
+        }
+        return {"model": model_name, "window": window, "baselines": baselines}
+
     @app.get("/alerts/{model_name}")
     def alerts_for(model_name: str) -> dict:
         from qsmlops.monitoring.alerts import evaluate as evaluate_alerts

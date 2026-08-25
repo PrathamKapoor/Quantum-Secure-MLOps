@@ -194,3 +194,48 @@ ml/drift.py consumers — per-feature drift attribution surfaced through the
 new telemetry/alerts stack, rolling-window performance drift baselines fed
 from TelemetryCollector.summary(), and DriftReports persisted via
 telemetry.record_drift (already wired). Do NOT start without owner signal.
+
+
+---
+
+# SESSION ADDENDUM 3 — Phase 8 (Advanced Drift Intelligence)
+
+Entry baseline: 221 passed / compile clean / demo OK.
+Exit state: **239 passed** (221 + 18), compileall clean, demo SUCCESS.
+
+## Implemented
+ml/drift.py: build_feature_attribution() (merges existing per-feature PSI/KS/
+prediction reports; real baseline/current means from arrays or UNAVAILABLE;
+ranked) + classify_drift() (six deterministic interpretations incl. broad vs
+isolated vs drift+performance combos). monitoring/collector.py:
+record_feature_attribution (kind=feature_drift, shared check_ts),
+feature_history/latest_feature_attribution, rolling_baseline(metric,window,
+min_history). alerts.evaluate extended (backward-compatible kwargs):
+FEATURE_DRIFT_CRITICAL / FEATURE_DRIFT_BROAD /
+SUSTAINED_PERFORMANCE_DEGRADATION. run_drift_check embeds attribution +
+intelligence into summary; health_check persists per-feature rows, computes
+mse/r2 rolling baselines from telemetry, returns feature_attribution /
+rolling_baseline / drift_intelligence. API: GET /drift/{model}/attribution,
+GET /performance/{model}/rolling. Config knobs: MONITORING_ROLLING_WINDOW,
+MONITORING_MIN_HISTORY, DRIFT_BROAD_FEATURE_FRACTION.
+
+## Files created
+tests/test_phase8_drift_intelligence.py · docs/PHASE_8_IMPLEMENTATION.md
+
+## Files modified
+qsmlops/ml/drift.py · qsmlops/monitoring/collector.py ·
+qsmlops/monitoring/alerts.py · qsmlops/pipeline/selfheal.py ·
+qsmlops/api/app.py · qsmlops/config.py · HANDOFF-A.md
+
+## Known limitations
+Attribution covers features present in detector reports (PSI/KS thresholds
+gate emission); prediction-drift pseudo-feature "predictions" included;
+rolling baselines require >= min_history observations per metric; no
+retention policy on telemetry.jsonl.
+
+## Phase 9 readiness — exact entry point
+Document PART 14 §14.3 PHASE 9 (Agentic Intelligence Layer): add the missing
+agent archetypes (Training Optimization, Incident Response, Governance,
+Optimization) onto BaseAgent with evidence-bearing Observations, register in
+SelfHealingMLOps.agents, extend supervisor facts — no new decision path.
+Do NOT start without owner signal.

@@ -48,6 +48,8 @@ def evaluate(
     drift_summary: dict | None = None,
     trust_decision: str | None = None,
     thresholds: dict | None = None,
+    feature_attributions: list[dict] | None = None,
+    rolling_baselines: list[dict] | None = None,
 ) -> list[Alert]:
     """Evaluate monitoring rules; returns open alerts (empty == healthy)."""
     thresholds = {**DEFAULT_METRIC_THRESHOLDS, **(thresholds or {})}
@@ -76,6 +78,25 @@ def evaluate(
         level, code = _TRUST_ALERT[trust_decision]
         alerts.append(Alert(level, code, model_id,
                             detail=f"trust decision {trust_decision}"))
+
+    # Phase 8: feature-level and sustained-degradation distinctions.
+    for row in feature_attributions or []:
+        if row.get("severity") == "CRITICAL":
+            alerts.append(Alert(
+                "CRITICAL", "FEATURE_DRIFT_CRITICAL", model_id,
+                detail=f"feature {row['feature']} drifted (score={row.get('score')})",
+            ))
+    if (drift_summary or {}).get("intelligence") == "BROAD_FEATURE_DRIFT":
+        alerts.append(Alert("HIGH", "FEATURE_DRIFT_BROAD", model_id,
+                            detail="broad multi-feature drift"))
+    for rb in rolling_baselines or []:
+        if rb.get("sufficient") and rb.get("degraded") and rb.get("relative_change", 0) >= 0.15:
+            alerts.append(Alert(
+                "HIGH", "SUSTAINED_PERFORMANCE_DEGRADATION", model_id,
+                detail=(f"{rb['metric']}: recent mean {rb['recent_mean']} vs prior "
+                        f"{rb['prior_mean']} ({rb['relative_change']*100:.1f}% worse "
+                        f"over {rb['window']} observations)"),
+            ))
 
     return alerts
 

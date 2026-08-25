@@ -93,3 +93,8 @@ DEFAULT_TRUST_THRESHOLDS: dict[str, float] = {
     "trusted": 90.0,
     "conditional": 70.0,
 }
+
+# Phase 7/8 monitoring configuration.
+MONITORING_ROLLING_WINDOW = 10          # observations per rolling window
+MONITORING_MIN_HISTORY = 3              # minimum history before baselines fire
+DRIFT_BROAD_FEATURE_FRACTION = 0.5      # fraction of features that counts as broad

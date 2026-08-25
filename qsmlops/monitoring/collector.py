@@ -131,3 +131,81 @@ class TelemetryCollector:
 
     def drift_history(self, model_id: str) -> list[dict]:
         return list(self.iter_entries(model_id, "drift"))
+
+    # ------------------------------------------------------------------
+    def feature_history(self, model_id: str) -> list[dict]:
+        """All persisted per-feature drift attributions (Phase 8)."""
+        return list(self.iter_entries(model_id, "feature_drift"))
+
+    def latest_feature_attribution(self, model_id: str) -> list[dict]:
+        """Attribution rows from the most recent drift check, ranked."""
+        rows = self.feature_history(model_id)
+        if not rows:
+            return []
+        last_check = rows[-1]["detail"].get("check_ts")
+        latest = [r for r in rows if r["detail"].get("check_ts") == last_check]
+        return sorted(latest, key=lambda r: r["detail"].get("rank", 999))
+
+    def record_feature_attribution(
+        self, model_id: str, attribution_rows: list[dict], source: str = "drift_engine",
+    ) -> int:
+        """Persist one row per drifting feature (Phase 8)."""
+        from qsmlops.crypto.hashing import canonical_json  # noqa: F401  (style parity)
+        n = 0
+        check_ts = time.time()
+        for row in attribution_rows:
+            self.record(
+                model_id,
+                "feature_drift",
+                row["feature"],
+                float(row.get("score", 0.0)),
+                source=source,
+                detail={**row, "check_ts": check_ts},
+            )
+            n += 1
+        return n
+
+    def rolling_baseline(
+        self,
+        model_id: str,
+        metric: str,
+        window: int = 10,
+        min_history: int = 3,
+        worse_direction: str = "auto",
+    ) -> dict:
+        """Rolling-window performance baseline from recorded telemetry.
+
+        Compares the most recent ``window`` observations against the prior
+        history of the same metric (both from this single store).
+        """
+        series = [e["value"] for e in self.series(model_id, metric)]
+        total = len(series)
+        if total < min_history:
+            return {
+                "metric": metric, "observations": total,
+                "sufficient": False,
+                "reason": f"need >= {min_history} observations, have {total}",
+                "window": window,
+            }
+        recent = series[-window:]
+        prior = series[:-len(recent)] if len(recent) < total else []
+        recent_mean = statistics.fmean(recent)
+        prior_mean = statistics.fmean(prior) if prior else recent_mean
+        delta = recent_mean - prior_mean
+        rel_change = (abs(delta) / abs(prior_mean)) if prior_mean else 0.0
+        if worse_direction == "auto":
+            worse = (delta > 0) if metric.startswith(("mse", "loss", "mae", "error")) else (delta < 0)
+        else:
+            worse = {"up": delta > 0, "down": delta < 0}.get(worse_direction, False)
+        return {
+            "metric": metric,
+            "observations": total,
+            "window": len(recent),
+            "recent_mean": round(recent_mean, 6),
+            "prior_mean": round(prior_mean, 6),
+            "delta": round(delta, 6),
+            "relative_change": round(rel_change, 6),
+            "direction": "worse" if worse else ("better" if delta != 0 else "flat"),
+            "sufficient": True,
+            "degraded": bool(worse and prior and rel_change > 0),
+        }
