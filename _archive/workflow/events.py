@@ -1,0 +1,2 @@
+'''Workflow event definitions.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any\n\n\n@dataclass\nclass WorkflowEvent:\n    name: str\n    payload: Any\n

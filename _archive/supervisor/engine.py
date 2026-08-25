@@ -1,0 +1,3 @@
+'''Supervisor engine wrapper.
+\nProvides a convenient entry point to the AdaptiveSupervisor implementation.
+'''\n\nfrom __future__ import annotations\n\nfrom qsmlops.supervisor.supervisor import AdaptiveSupervisor\n\n\ndef create_supervisor(agents, registry, keystore, agility, ledger, artifacts, policy=None, policy_engine=None, learner=None, verifier_owner="verifier"):\n    return AdaptiveSupervisor(agents, registry, keystore, agility, ledger, artifacts, policy, policy_engine, learner, verifier_owner)\n

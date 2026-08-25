@@ -1,0 +1,2 @@
+'''Provenance record structures.'''
+\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any, Dict\n\n\n@dataclass\nclass ProvenanceRecord:\n    step: str\n    details: Dict[str, Any]\n    timestamp: float\n

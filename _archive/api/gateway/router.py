@@ -1,0 +1,4 @@
+'''API Gateway router.
+\nDefines the top‑level FastAPI router that mounts versioned route groups.
+'''\n\nfrom __future__ import annotations\n\nfrom fastapi import APIRouter\n\nrouter = APIRouter(prefix="/api/v1")\n\n# Placeholder sub‑routers – actual implementations live in their own modules\n# Import lazily to avoid circular imports when modules are added later\n\ndef include_routes(app) -> None:\n    """Mount the router onto a FastAPI app instance."""
+    app.include_router(router)\n\n# Example status endpoint\n@router.get("/status")\nasync def status() -> dict:\n    return {"status": "ok", "message": "API gateway operational"}\n
