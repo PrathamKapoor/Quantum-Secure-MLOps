@@ -38,6 +38,7 @@ from qsmlops.pipeline.training import (
 )
 from qsmlops.passport.passport import new_passport
 from qsmlops.registry.registry import ModelRegistry
+from qsmlops.serving.deployment import DeploymentService
 from qsmlops.supervisor.decisions import Decision
 from qsmlops.supervisor.learning import LearningStore
 from qsmlops.supervisor.supervisor import AdaptiveSupervisor
@@ -52,7 +53,18 @@ class SelfHealingMLOps:
         self.config = config or PlatformConfig()
         self.config.ensure_dirs()
         self.artifacts = ArtifactStore(self.config.artifacts_dir)
-        self.keystore = KeyStore(self.config.keys_dir)
+        # Gate-D security remediation: prefer the encrypted keystore whenever
+        # a passphrase is configured. EncryptedKeyStore migrates any legacy
+        # plaintext secret_keys.json into its vault and deletes it.
+        passphrase = self.config.keystore_passphrase
+        if passphrase:
+            from qsmlops.crypto.secure_keystore import EncryptedKeyStore
+
+            self.keystore = EncryptedKeyStore(
+                self.config.keys_dir, passphrase=passphrase
+            )
+        else:
+            self.keystore = KeyStore(self.config.keys_dir)
         self.ledger = EvidenceLedger(self.config.ledger_path)
         self.registry = ModelRegistry(
             self.config.registry_path, self.artifacts, self.keystore, self.ledger
@@ -86,6 +98,38 @@ class SelfHealingMLOps:
             verifier_owner=VERIFIER,
         )
         self.supervisor.set_retrain_function(self._auto_retrain)
+        # Phase 6: governed deployment-request boundary. registry.deploy()
+        # remains the sole promotion mechanism; this service validates each
+        # request (identity, registry state, crypto gates, Phase-5 trust
+        # eligibility, environment compatibility, policy) and then delegates
+        # promotion to the registry.
+        self.deployments = DeploymentService(self.registry)
+
+    def request_deployment(
+        self,
+        model_name: str | None = None,
+        version_id: str | None = None,
+        actor: str = "",
+        target_environment: str = "production",
+    ) -> dict:
+        """Governed deployment request: validate every gate, then let the
+        registry promote. Raises DeploymentError with structured details on
+        any refusal."""
+        return self.deployments.request(
+            model_name=model_name,
+            version_id=version_id,
+            actor=actor,
+            target_environment=target_environment,
+        )
+
+    def validate_deployment(
+        self,
+        version_id: str,
+        actor: str,
+        target_environment: str = "production",
+    ) -> dict:
+        """Run all deployment gates WITHOUT promoting."""
+        return self.deployments.validate(version_id, actor, target_environment)
 
     # ---------- bootstrap ----------
     def _provision_keys(self) -> None:
@@ -547,6 +591,34 @@ class SelfHealingMLOps:
         if evaluation["decision"] == "VERIFIED":
             self.approve_and_deploy(result["version_id"])
         return result["version_id"]
+
+    def request_deployment(
+        self,
+        model_name: str | None = None,
+        version_id: str | None = None,
+        actor: str = "",
+        target_environment: str = "production",
+    ) -> dict:
+        """Governed deployment request (Phase 6).
+
+        Runs every gate; refusals raise DeploymentError with structured,
+        audited details. Promotion itself is performed by the registry.
+        """
+        return self.deployments.request(
+            model_name=model_name,
+            version_id=version_id,
+            actor=actor,
+            target_environment=target_environment,
+        )
+
+    def validate_deployment(
+        self,
+        version_id: str,
+        actor: str,
+        target_environment: str = "production",
+    ) -> dict:
+        """Run all deployment gates WITHOUT promoting (dry run)."""
+        return self.deployments.validate(version_id, actor, target_environment)
 
     def close(self) -> None:
         self.registry.close()

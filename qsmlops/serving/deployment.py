@@ -18,7 +18,7 @@ import time
 
 from qsmlops.registry.registry import ModelRegistry
 from qsmlops.serving.environment import validate_environment
-from qsmlops.serving.service import ModelDeploymentService, ServingError
+from qsmlops.serving.service import ModelDeploymentService
 from qsmlops.supervisor.policy import build_facts, default_policy_engine
 
 DEPLOYABLE_STATES = {"APPROVED", "DEPLOYED"}  # DEPLOYED => re-deploy/restore
@@ -50,6 +50,8 @@ class DeploymentService:
                    "reason": reason, "at": time.time(), **details}
         self.ledger_append({"type": "deployment_denied", **payload})
         return DeploymentError(reason, payload)
+
+    def _resolve_version(self, version_id: str | None, model_name: str | None) -> str:
         if version_id:
             return version_id
         if not model_name:
@@ -209,7 +211,13 @@ class DeploymentService:
                              str(exc), target_environment=target_environment)
             raise err
 
-        validation = self.validate(resolved_vid, actor, target_environment)
+        try:
+            validation = self.validate(resolved_vid, actor, target_environment)
+        except KeyError as exc:
+            err = self._deny(resolved_vid, actor,
+                             f"unknown version: {exc}",
+                             target_environment=target_environment)
+            raise err
         if not validation["eligible"]:
             failed = [c["name"] for c in validation["checks"] if not c["passed"]]
             err = self._deny(
@@ -229,12 +237,12 @@ class DeploymentService:
         verification = {"passed": True, "detail": ""}
         try:
             service = ModelDeploymentService(self.registry)
-            service.load(rec_model := validation["model_name"])
+            service.load(validation["model_name"])
             active = self.registry.active_deployment(validation["model_name"])
             if not active or active["version_id"] != resolved_vid:
                 verification = {"passed": False,
                                 "detail": "active deployment does not match requested version"}
-        except (ServingError, Exception) as exc:  # explicit: serving refused the promoted model
+        except Exception as exc:  # serving refused the promoted model
             verification = {"passed": False, "detail": f"{type(exc).__name__}: {exc}"}
 
         result = {

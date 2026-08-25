@@ -32,6 +32,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from qsmlops.pipeline.selfheal import SelfHealingMLOps
+from qsmlops.serving.deployment import DeploymentError
+from qsmlops.serving.service import ModelDeploymentService
 from qsmlops.registry.registry import ACTIVE_STATES, RegistryError
 from qsmlops.scores import compute_scores
 
@@ -47,6 +49,17 @@ class RevokeRequest(BaseModel):
 
 class TrustRefreshRequest(BaseModel):
     actor: str = "api"
+
+
+class DeploymentRequestBody(BaseModel):
+    model_name: str | None = None
+    version_id: str | None = None
+    actor: str = "operator"
+    target_environment: str = "production"
+
+
+class RollbackBody(BaseModel):
+    actor: str = "operator"
 
 
 def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
@@ -174,6 +187,57 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
             "revoked_by": body.actor,
             "reason": body.reason,
         }
+
+    # ---------------- deployment (Phase 6) ----------------
+    @app.post("/deployment/request")
+    def deployment_request(body: DeploymentRequestBody) -> dict:
+        """Governed deployment request: every gate runs; refusals return a
+        structured 409 with the failed checks. Promotion is performed by the
+        registry via pipeline.deployment (never by this handler)."""
+        try:
+            return pipeline.request_deployment(
+                model_name=body.model_name,
+                version_id=body.version_id,
+                actor=body.actor,
+                target_environment=body.target_environment,
+            )
+        except DeploymentError as exc:
+            raise HTTPException(status_code=409, detail=exc.to_dict())
+
+    @app.get("/deployment/status/{model_name}")
+    def deployment_status(model_name: str) -> dict:
+        active = pipeline.registry.active_deployment(model_name)
+        if not active:
+            raise HTTPException(status_code=404, detail=f"no active deployment for {model_name}")
+        latest_trust = pipeline.registry.latest_trust(active["version_id"])
+        serving_ok = True
+        detail = ""
+        try:
+            ModelDeploymentService(pipeline.registry).load(model_name)
+        except Exception as exc:  # serving refused the active deployment
+            serving_ok = False
+            detail = f"{type(exc).__name__}: {exc}"
+        return {
+            "model": model_name,
+            "active_deployment": active,
+            "serving_healthy": serving_ok,
+            "serving_detail": detail,
+            "trust_decision": (latest_trust or {}).get("trust_decision"),
+        }
+
+    @app.get("/deployment/validation/{version_id}")
+    def deployment_validation(version_id: str, actor: str = "api", target: str = "production") -> dict:
+        _require_version(version_id)
+        report = pipeline.validate_deployment(version_id, actor=actor, target_environment=target)
+        return report
+
+    @app.post("/deployment/rollback/{model_name}")
+    def deployment_rollback(model_name: str, body: RollbackBody) -> dict:
+        prev = pipeline.registry.rollback(model_name, body.actor)
+        if prev is None:
+            raise HTTPException(status_code=409, detail=f"no previous version to restore for {model_name}")
+        return {"model": model_name, "restored_version_id": prev,
+                "state": pipeline.registry.get_version(prev)["state"], "actor": body.actor}
 
     # ---------------- verification ----------------
     @app.get("/verification/{version_id}")

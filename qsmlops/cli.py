@@ -107,6 +107,65 @@ def request_approval(ctx, version_id, approver):
 
 
 @cli.command()
+@click.option("--model", "model_name", default=None)
+@click.option("--version-id", default=None)
+@click.option("--actor", default="operator", show_default=True)
+@click.option("--target", "target_environment", default="production", show_default=True)
+@click.pass_context
+def request_deployment(ctx, model_name, version_id, actor, target_environment):
+    """Governed deployment request: validate all gates, then promote via the registry."""
+    pipeline = ctx.obj["pipeline"]
+    try:
+        result = pipeline.request_deployment(
+            model_name=model_name,
+            version_id=version_id,
+            actor=actor,
+            target_environment=target_environment,
+        )
+    except Exception as exc:
+        details = getattr(exc, "details", None)
+        _dump({"deployment": "DENIED", "reason": str(exc),
+               **({"details": details} if details else {})})
+        sys.exit(1)
+    _dump(result)
+
+
+@cli.command()
+@click.option("--model", "model_name", required=True)
+@click.pass_context
+def deployment_status(ctx, model_name):
+    """Show active deployment and serving health for a model."""
+    pipeline = ctx.obj["pipeline"]
+    active = pipeline.registry.active_deployment(model_name)
+    if not active:
+        click.echo(f"no active deployment for {model_name}", err=True)
+        sys.exit(1)
+    healthy, detail = True, ""
+    try:
+        from qsmlops.serving.service import ModelDeploymentService
+        ModelDeploymentService(pipeline.registry).load(model_name)
+    except Exception as exc:
+        healthy, detail = False, f"{type(exc).__name__}: {exc}"
+    latest = pipeline.registry.latest_trust(active["version_id"])
+    _dump({"model": model_name, "active_deployment": active,
+           "serving_healthy": healthy, "serving_detail": detail,
+           "trust_decision": (latest or {}).get("trust_decision")})
+
+
+@cli.command()
+@click.option("--version-id", required=True)
+@click.option("--actor", default="operator", show_default=True)
+@click.option("--target", "target_environment", default="production", show_default=True)
+@click.pass_context
+def validate_deployment(ctx, version_id, actor, target_environment):
+    """Dry-run every deployment gate without promoting."""
+    pipeline = ctx.obj["pipeline"]
+    report = pipeline.validate_deployment(version_id, actor=actor,
+                                          target_environment=target_environment)
+    _dump(report)
+
+
+@cli.command()
 @click.option("--version-id", required=True)
 @click.option("--refresh", is_flag=True, help="Force a fresh evaluation before showing")
 @click.pass_context

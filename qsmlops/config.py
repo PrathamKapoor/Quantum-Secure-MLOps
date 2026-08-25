@@ -40,6 +40,18 @@ class PlatformConfig:
     def learning_path(self) -> Path:
         return self.root / "supervisor" / "learning.json"
 
+    @property
+    def keystore_passphrase(self) -> str | None:
+        """Passphrase enabling the encrypted keystore (Gate-D remediation).
+
+        When ``QSMLOPS_KEYSTORE_PASSPHRASE`` is set, the platform opens its
+        key store through :class:`~qsmlops.crypto.secure_keystore.EncryptedKeyStore`
+        (AES-256-GCM vault; any legacy plaintext ``secret_keys.json`` is
+        migrated into the vault and deleted). When unset, the legacy
+        filesystem keystore is used unchanged for development compatibility.
+        """
+        return os.environ.get("QSMLOPS_KEYSTORE_PASSPHRASE") or None
+
     def ensure_dirs(self) -> None:
         for p in (
             self.artifacts_dir,
