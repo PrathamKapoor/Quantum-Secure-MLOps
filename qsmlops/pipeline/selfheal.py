@@ -18,6 +18,10 @@ import time
 from pathlib import Path
 
 from qsmlops.agents.data_agent import DataAgent
+from qsmlops.agents.governance_agent import GovernanceAgent
+from qsmlops.agents.incident_response_agent import IncidentResponseAgent
+from qsmlops.agents.optimization_agent import OptimizationAgent
+from qsmlops.agents.training_optimization_agent import TrainingOptimizationAgent
 from qsmlops.agents.performance_agent import PerformanceAgent
 from qsmlops.agents.quantum_agent import QuantumSecurityAgent
 from qsmlops.agents.redteam import RedTeamAgent
@@ -85,6 +89,11 @@ class SelfHealingMLOps:
             SecurityAgent(self.artifacts),
             QuantumSecurityAgent(self.agility),
             RedTeamAgent(self.artifacts),
+            # Phase 9 agentic-intelligence archetypes (observational only):
+            TrainingOptimizationAgent(),
+            IncidentResponseAgent(self.registry),
+            GovernanceAgent(self.registry),
+            OptimizationAgent(self.registry),
         ]
         self.learner = LearningStore(
             self.config.learning_path, max_consecutive_failures=2
@@ -364,8 +373,16 @@ class SelfHealingMLOps:
     def evaluate_version(self, version_id: str) -> dict:
         rec = self.registry.get_version(version_id)
         passport = self.registry.load_passport(version_id)
+        datasets = {}
+        ds_name = passport.training_info.get("dataset")
+        if ds_name:
+            ds = self.dataset_cache.get(ds_name) or self._load_dataset(ds_name)
+            if ds is not None:
+                datasets[ds_name] = ds
         context = {
             "subject_id": version_id,
+            "version_record": rec,
+            "datasets": datasets,
             "passport": passport,
             "keystore": self.keystore,
             "bom": self._load_bom(rec["bom_digest"]),
@@ -482,9 +499,16 @@ class SelfHealingMLOps:
         if current_data:
             drift_reports, drift_summary = self.run_drift_check(model_name, current_data)
             self.last_drift_status[model_name] = drift_summary
+        datasets = {}
+        ds_name = passport.training_info.get("dataset")
+        if ds_name:
+            ds = self.dataset_cache.get(ds_name) or self._load_dataset(ds_name)
+            if ds is not None:
+                datasets[ds_name] = ds
         context = {
             "subject_id": version_id,
             "version_record": self.registry.get_version(version_id),
+            "datasets": datasets,
             "passport": passport,
             "keystore": self.keystore,
             "bom": self._load_bom(self.registry.get_version(version_id)["bom_digest"]),
