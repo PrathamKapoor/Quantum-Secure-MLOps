@@ -227,14 +227,21 @@ def revoke(ctx, version_id, reason, actor):
 @click.option("--model", "model_name", required=True)
 @click.pass_context
 def deploy(ctx, model_name):
-    """Deploy the latest approved version of a model."""
+    """Deploy the latest approved version of a model.
+
+    Uses the same governed deployment service as the REST API so every gate
+    (identity, SoD, crypto, trust eligibility, environment, policy) runs
+    before the registry promotes the version.
+    """
     pipeline = ctx.obj["pipeline"]
-    active = pipeline.registry.active_deployment(model_name)
-    if not active:
-        click.echo("no approved version ready; run approve first", err=True)
+    try:
+        result = pipeline.request_deployment(model_name=model_name, actor="cli")
+    except Exception as exc:
+        details = getattr(exc, "details", None)
+        _dump({"deployment": "DENIED", "reason": str(exc),
+               **({"details": details} if details else {})})
         sys.exit(1)
-    dep_id = pipeline.registry.deploy(active["version_id"], "cli")
-    _dump({"deployment_id": dep_id, "status": "deployed"})
+    _dump(result)
 
 
 @cli.command()

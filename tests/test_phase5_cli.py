@@ -143,5 +143,31 @@ class TestRegistryCli:
         assert row["state"] == "REVOKED"
 
 
+class TestDeployCli:
+    def test_deploy_deploys_latest_approved_version(self, home):
+        trained = _train(home)
+        vid = trained["version_id"]
+        _invoke(home, "verify", "--version-id", vid)
+        _invoke(home, "request-approval", "--version-id", vid, "--approver", "gov-bot")
+
+        out = _invoke(home, "deploy", "--model", "cli-model")
+        assert out.get("deployment") != "DENIED"
+        assert out["state"] == "DEPLOYED"
+        assert "deployment_id" in out
+
+    def test_deploy_without_approved_version_is_denied(self, home):
+        trained = _train(home, model="not-approved")
+        vid = trained["version_id"]
+        _invoke(home, "verify", "--version-id", vid)
+
+        runner = home["runner"]
+        result = runner.invoke(
+            cli, ["deploy", "--model", "not-approved"], catch_exceptions=False
+        )
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["deployment"] == "DENIED"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

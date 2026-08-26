@@ -672,34 +672,6 @@ class SelfHealingMLOps:
             self.approve_and_deploy(result["version_id"])
         return result["version_id"]
 
-    def request_deployment(
-        self,
-        model_name: str | None = None,
-        version_id: str | None = None,
-        actor: str = "",
-        target_environment: str = "production",
-    ) -> dict:
-        """Governed deployment request (Phase 6).
-
-        Runs every gate; refusals raise DeploymentError with structured,
-        audited details. Promotion itself is performed by the registry.
-        """
-        return self.deployments.request(
-            model_name=model_name,
-            version_id=version_id,
-            actor=actor,
-            target_environment=target_environment,
-        )
-
-    def validate_deployment(
-        self,
-        version_id: str,
-        actor: str,
-        target_environment: str = "production",
-    ) -> dict:
-        """Run all deployment gates WITHOUT promoting (dry run)."""
-        return self.deployments.validate(version_id, actor, target_environment)
-
     def close(self) -> None:
         self.registry.close()
 
