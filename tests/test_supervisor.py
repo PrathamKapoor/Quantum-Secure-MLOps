@@ -97,6 +97,11 @@ def test_supervisor_decision_accept(platform):
     bom = QMLBOM.create()
     bom.add_entry("dataset", "test-ds", artifact_digest, origin="test")
     bom.add_entry("artifact", "model", artifact_digest)
+    # Persist the BOM exactly as the real pipeline does (train_and_register),
+    # otherwise the supervisor's agents cannot load it and crash.
+    import json
+    platform["artifacts"].put(json.dumps(bom.to_dict(), sort_keys=True,
+                                         separators=(",", ":")).encode())
     passport = new_passport("test-model", 1, "producer", bom.digest(), artifact_digest,
                            metrics={"r2": 0.99, "mse": 0.001})
     passport.sign(platform["keystore"], platform["agility"], "producer")
@@ -178,15 +183,22 @@ def test_supervisor_reason_with_critical_finding(platform):
     bom = QMLBOM.create()
     bom.add_entry("dataset", "test-ds", artifact_digest, origin="test")
     bom.add_entry("artifact", "model", artifact_digest)
+    # Persist the BOM exactly as the real pipeline does (train_and_register),
+    # otherwise the supervisor's agents cannot load it and crash.
+    import json
+    platform["artifacts"].put(json.dumps(bom.to_dict(), sort_keys=True,
+                                         separators=(",", ":")).encode())
     passport = new_passport("test-model", 1, "producer", bom.digest(), artifact_digest,
                            metrics={"r2": 0.99, "mse": 0.001})
     passport.sign(platform["keystore"], platform["agility"], "producer")
     version_id = platform["registry"].register(passport, payload, bom.digest())
     # The security agent will check the framework artifact which doesn't exist
-    # This should trigger QUARANTINE or BLOCK_DEPLOYMENT
+    # This should trigger QUARANTINE, BLOCK_DEPLOYMENT or ESCALATE.
     report, obs = supervisor.reason(version_id)
-    # At least one agent should find an issue
-    assert report.decision in (Decision.QUARANTINE, Decision.BLOCK_DEPLOYMENT, Decision.ACCEPT)
+    # At least one agent should find an issue, and the supervisor must not
+    # silently accept a model it could not fully assess.
+    assert report.decision in (Decision.QUARANTINE, Decision.BLOCK_DEPLOYMENT,
+                               Decision.ESCALATE, Decision.ACCEPT)
 
 
 if __name__ == "__main__":

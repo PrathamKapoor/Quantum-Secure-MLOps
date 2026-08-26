@@ -53,6 +53,23 @@ def action_handler(decision: Decision):
     return deco
 
 
+class _NoOpLearner:
+    """Safe default when no learning store is supplied: never escalates and
+    records nothing, so the supervisor still functions without a learner.
+    (Replaces the previous `LearningStore.__new__(LearningStore)`, which
+    returned an uninitialised instance whose methods raised at runtime.)"""
+
+    def should_escalate(self, model_name: str) -> bool:
+        return False
+
+    def consecutive_failures(self, model_name: str) -> int:
+        return 0
+
+    def record_outcome(self, model_name: str, decision: str,
+                       success: bool, detail: str = "") -> None:
+        return None
+
+
 class AdaptiveSupervisor:
     def __init__(
         self,
@@ -75,7 +92,7 @@ class AdaptiveSupervisor:
         self.artifacts = artifacts
         self.policy = policy or SupervisorPolicy()
         self.policy_engine = policy_engine or default_policy_engine()
-        self.learner = learner or LearningStore.__new__(LearningStore)
+        self.learner = learner or _NoOpLearner()
         self.verifier_owner = verifier_owner
         self._retrain_fn = None
         self._last_facts: dict = {}
@@ -135,18 +152,22 @@ class AdaptiveSupervisor:
             from qsmlops.supervisor.validation import validate_observation
             clean, report = validate_observation(obs)
             self._last_validation.append(report.to_dict())
-            if not report.ok and report.problems:
+            _orig_count = len(getattr(obs, "findings", []) or [])
+            if len(clean.findings) < _orig_count:
+                # Validation silently dropped malformed findings; replace the
+                # lost evidence with an explicit failed marker so the agent's
+                # output is not weaker after sanitisation (fail-closed).
                 from qsmlops.agents.base import Finding
 
                 clean.findings.append(Finding(
                     "evidence_validation", False, "HIGH",
-                    detail="; ".join(report.problems[:3]),
+                    detail=("validation dropped "
+                            f"{_orig_count - len(clean.findings)} finding(s): "
+                            + "; ".join(report.problems[:3])),
                     observation="observation failed evidence validation",
                     confidence=1.0, recommendation="ESCALATE",
                 ))
             observations.append(clean)
-        if not hasattr(self, "_last_validation"):
-            self._last_validation = []
         return observations
 
     # ---------------- Detect + Reason ----------------
@@ -210,7 +231,11 @@ class AdaptiveSupervisor:
             if self.policy_engine else None
         )
 
-        if learning_escalate:
+        if not observations:
+            decision = Decision.ESCALATE
+            rationale_parts.append(
+                "no agent observations produced; cannot assess autonomously")
+        elif learning_escalate:
             decision = Decision.ESCALATE
             rationale_parts.append(
                 f"learning store: {self.learner.consecutive_failures(model_name)} "
@@ -238,6 +263,9 @@ class AdaptiveSupervisor:
         elif rollback:
             decision = Decision.ROLLBACK
             rationale_parts.append("critical drift detected; rollback required")
+        elif "ESCALATE" in recs:
+            decision = Decision.ESCALATE
+            rationale_parts.append("agent recommended escalation for human review")
         elif risk >= self.policy.quarantine_risk:
             decision = Decision.QUARANTINE
             rationale_parts.append(f"aggregate risk {risk:.1f} above quarantine threshold")
@@ -385,7 +413,14 @@ class AdaptiveSupervisor:
             return rec["state"] != "APPROVED"
         if decision == Decision.RETRAIN:
             versions = self.registry.list_versions(rec["model_name"])
-            return len(versions) >= 2
+            if not versions:
+                return False
+            newest = versions[-1]
+            # A retrain cycle is only "verified" if it produced a genuinely
+            # newer version that has since been promoted (APPROVED/DEPLOYED) —
+            # merely having >1 version in the registry does not prove recovery.
+            return (newest["version_id"] != version_id
+                    and newest["state"] in ("APPROVED", "DEPLOYED"))
         return True
 
     def _signer_owner(self, version_id: str) -> str:

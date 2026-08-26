@@ -349,6 +349,7 @@ def build_facts(
         "recommendation_rotate_keys": "ROTATE_KEYS" in recs,
         "recommendation_retrain": "RETRAIN" in recs,
         "recommendation_rollback": "ROLLBACK" in recs,
+        "recommendation_escalate": "ESCALATE" in recs,
         "distinct_recommendations": len(set(recs)),
         "state": (version_record or {}).get("state", ""),
         "model_state_deployed": (version_record or {}).get("state") == "DEPLOYED",
@@ -430,6 +431,13 @@ DEFAULT_POLICY_DOCUMENT: dict = {
             "description": "Crypto posture degradation rotates signing keys.",
             "when": {"all": [{"field": "recommendation_rotate_keys", "op": "eq", "value": True}]},
             "action": "ROTATE_KEYS",
+        },
+        {
+            "name": "escalate_on_agent_recommendation",
+            "priority": 90,
+            "description": "An agent explicitly recommending escalation requires human review rather than silent autonomous acceptance.",
+            "when": {"all": [{"field": "recommendation_escalate", "op": "eq", "value": True}]},
+            "action": "ESCALATE",
         },
     ],
     "thresholds": {
