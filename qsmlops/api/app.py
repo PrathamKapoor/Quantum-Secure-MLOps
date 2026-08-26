@@ -232,20 +232,33 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
     @app.get("/alerts/{model_name}")
     def alerts_for(model_name: str) -> dict:
         from qsmlops.monitoring.alerts import evaluate as evaluate_alerts
+        from qsmlops.config import MONITORING_ROLLING_WINDOW, MONITORING_MIN_HISTORY
 
         versions = [v["version_id"] for v in pipeline.registry.list_versions(model_name)]
         if not versions:
             raise HTTPException(status_code=404, detail=f"unknown model {model_name}")
         active = pipeline.registry.active_deployment(model_name)
-        metrics = {}
         latest_metrics = pipeline.telemetry.summary(model_name) or (
             pipeline.telemetry.summary(active["version_id"]) if active else {})
         metrics = {k: v["last"] for k, v in latest_metrics.items()}
+        drift_summary = pipeline.last_drift_status.get(model_name)
+        feature_attributions = pipeline.telemetry.latest_feature_attribution(model_name) or None
+        rolling_baselines = [
+            pipeline.telemetry.rolling_baseline(
+                model_name, metric,
+                window=MONITORING_ROLLING_WINDOW,
+                min_history=MONITORING_MIN_HISTORY,
+            )
+            for metric in ("mse", "r2")
+        ]
         alerts = evaluate_alerts(
             model_name,
             metrics=metrics or None,
+            drift_summary=drift_summary,
             trust_decision=(pipeline.registry.get_version(versions[-1])["state"] == "QUARANTINED"
                             and "QUARANTINED") or None,
+            feature_attributions=feature_attributions,
+            rolling_baselines=[rb for rb in rolling_baselines if rb.get("sufficient")] or None,
         )
         return {"model": model_name, "alerts": [a.to_dict() for a in alerts],
                 "count": len(alerts)}

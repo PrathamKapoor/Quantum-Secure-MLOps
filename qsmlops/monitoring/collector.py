@@ -14,6 +14,7 @@ Records::
 from __future__ import annotations
 
 import json
+import math
 import statistics
 import threading
 import time
@@ -62,7 +63,7 @@ class TelemetryCollector:
         """Persist every numeric metric from a health observation."""
         n = 0
         for name, value in (metrics or {}).items():
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float)) and math.isfinite(value):
                 self.record(model_id, "metric", name, float(value), source,
                             detail=extra or {})
                 n += 1
@@ -189,8 +190,22 @@ class TelemetryCollector:
             }
         recent = series[-window:]
         prior = series[:-len(recent)] if len(recent) < total else []
+        if not prior:
+            # Not enough history to build a prior baseline: cannot assess
+            # degradation, so the baseline is explicitly NOT sufficient
+            # (fail-closed rather than falsely reporting "healthy").
+            return {
+                "metric": metric,
+                "observations": total,
+                "window": len(recent),
+                "sufficient": False,
+                "reason": (
+                    f"need > {window} observations to establish a prior baseline "
+                    f"(have {total}); degradation cannot yet be assessed"
+                ),
+            }
         recent_mean = statistics.fmean(recent)
-        prior_mean = statistics.fmean(prior) if prior else recent_mean
+        prior_mean = statistics.fmean(prior)
         delta = recent_mean - prior_mean
         rel_change = (abs(delta) / abs(prior_mean)) if prior_mean else 0.0
         if worse_direction == "auto":

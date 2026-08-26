@@ -495,7 +495,8 @@ class SelfHealingMLOps:
         drift_reports: list = []
         drift_summary: dict | None = None
         if current_data:
-            drift_reports, drift_summary = self.run_drift_check(model_name, current_data)
+            drift_reports, drift_summary = self.run_drift_check(
+                model_name, current_data, current_metrics=metrics)
             self.last_drift_status[model_name] = drift_summary
         datasets = {}
         ds_name = passport.training_info.get("dataset")
@@ -559,7 +560,8 @@ class SelfHealingMLOps:
         self.last_observations[model_name] = outcome["report"]["observations"]
         return outcome
 
-    def run_drift_check(self, model_name: str, current_data: list[list[float]]) -> tuple[list, dict]:
+    def run_drift_check(self, model_name: str, current_data: list[list[float]],
+                         current_metrics: dict | None = None) -> tuple[list, dict]:
         """Feature (PSI/KS) + prediction drift of current data vs training data."""
         import numpy as np
 
@@ -582,8 +584,13 @@ class SelfHealingMLOps:
         cur_preds = self._predict_matrix(model_name, cur)
         engine.set_reference(ref, predictions=ref_preds, metrics=dict(passport.metrics),
                              feature_names=ds.feature_names)
+        # Compare live metrics against the passport baseline. When the caller
+        # provides live `current_metrics` (as health_check does from the
+        # deployment's recorded telemetry), the performance-drift detector is
+        # actually exercised; otherwise it falls back to the baseline and will
+        # correctly report no performance drift.
         reports = engine.detect_all(cur, current_predictions=cur_preds,
-                                    current_metrics=dict(passport.metrics))
+                                    current_metrics=current_metrics or dict(passport.metrics))
         summary = engine.get_summary(reports)
         # Phase 8: per-feature attribution + deterministic interpretation.
         from qsmlops.ml.drift import build_feature_attribution, classify_drift

@@ -4,6 +4,7 @@ Implements PSI, KS-test, prediction drift, and performance drift detection.
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
@@ -148,7 +149,10 @@ class KSDriftDetector:
                         details=f"KS={ks_stat:.4f}, p={p_value:.4f} for {feature_name}"
                     ))
             except Exception:
-                pass
+                # A failing KS test on a single feature must not silently
+                # vanish; record it so operators can investigate.
+                logging.getLogger(__name__).warning(
+                    "KS drift test failed for feature %r; skipped", feature_name, exc_info=True)
         
         return reports
 

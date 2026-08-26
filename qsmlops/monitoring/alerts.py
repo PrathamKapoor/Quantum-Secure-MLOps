@@ -8,6 +8,7 @@ or the API can consume.
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -58,16 +59,22 @@ def evaluate(
 
     r2 = metrics.get("r2")
     mse = metrics.get("mse")
-    if r2 is not None and mse is not None:
-        r2_bad = r2 < thresholds["min_r2"]
-        mse_bad = mse > thresholds["max_mse"]
-        if r2_bad or mse_bad:
-            level = "CRITICAL" if (r2_bad and mse_bad) else "HIGH"
-            alerts.append(Alert(
-                level, "PERFORMANCE_DEGRADED", model_id,
-                detail=(f"r2={r2} (min {thresholds['min_r2']}), "
-                        f"mse={mse} (max {thresholds['max_mse']})"),
-            ))
+    r2_bad = r2 is not None and math.isfinite(r2) and r2 < thresholds["min_r2"]
+    mse_bad = mse is not None and math.isfinite(mse) and mse > thresholds["max_mse"]
+    if r2_bad or mse_bad:
+        level = "CRITICAL" if (r2_bad and mse_bad) else "HIGH"
+        alerts.append(Alert(
+            level, "PERFORMANCE_DEGRADED", model_id,
+            detail=(f"r2={r2} (min {thresholds['min_r2']}), "
+                    f"mse={mse} (max {thresholds['max_mse']})"),
+        ))
+    if (r2 is not None and not math.isfinite(r2)) or (mse is not None and not math.isfinite(mse)):
+        # Non-finite metrics are a real degradation signal — alert rather
+        # than silently passing (fail-closed).
+        alerts.append(Alert(
+            "HIGH", "PERFORMANCE_DEGRADED", model_id,
+            detail=f"non-finite metric value (r2={r2}, mse={mse})",
+        ))
 
     sev = str((drift_summary or {}).get("max_severity", "NONE")).upper()
     if sev in _DRIFT_ALERT:
