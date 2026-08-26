@@ -120,13 +120,15 @@ class DeploymentService:
         except KeyError:
             check("signer_key_usable", False, "signer key absent from trust anchors")
 
-        # 4. trust eligibility (Phase 5 result; never recomputed here) ----
-        latest = self.registry.latest_trust(version_id)
-        if latest is None:
-            trust_result = self.registry.trust_evaluation(version_id, actor="deployment-validate")
-            trust_summary = trust_result.to_dict()
-        else:
-            trust_summary = latest["report"] or {}
+        # 4. trust eligibility — recomputed FRESH at deploy time. We never reuse
+        #    a cached `latest_trust` decision here: a trust evaluation captured
+        #    earlier could be invalidated by subsequent key rotation, revocation
+        #    or state changes, so the deployment gate must re-derive eligibility
+        #    against *current* evidence. This re-evaluation is not persisted; it
+        #    only gates this deployment.
+        trust_result = self.registry.trust_evaluation(
+            version_id, actor="deployment-validate", persist=False)
+        trust_summary = trust_result.to_dict()
         decision = trust_summary.get("decision", "")
         eligible = bool(trust_summary.get("promotion_eligible")) and decision in (
             "TRUSTED", "CONDITIONALLY_TRUSTED",

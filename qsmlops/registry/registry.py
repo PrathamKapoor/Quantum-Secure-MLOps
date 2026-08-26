@@ -347,9 +347,8 @@ class ModelRegistry:
         all_checks.append(("passport_signature_valid", sig_ok))
         art_ok = self.artifacts.verify(rec["artifact_digest"])
         all_checks.append(("artifact_integrity", art_ok))
-        all_checks.append(
-            ("artifact_matches_passport", passport.identity.get("artifact_digest") == rec["artifact_digest"])
-        )
+        artifact_match = passport.identity.get("artifact_digest") == rec["artifact_digest"]
+        all_checks.append(("artifact_matches_passport", artifact_match))
         # Phase 4: record the cryptographic evidence backing this verification
         # so every packet proves WHICH suite/key/hash bound the artifact.
         crypto_proofs: dict = {"hash_algorithm": HASH_ALGORITHM}
@@ -375,7 +374,10 @@ class ModelRegistry:
             ],
             proofs={"crypto": crypto_proofs},
         )
-        passed = all(p for _, p in checks) and sig_ok and art_ok
+        # The CRITICAL artifact_matches_passport binding check is part of the
+        # pass/fail decision (registry.py:351). An attacker with DB-write access
+        # who alters model_versions.artifact_digest must NOT pass verification.
+        passed = all(p for _, p in checks) and sig_ok and art_ok and artifact_match
         packet.decision = "VERIFIED" if passed else "QUARANTINE"
         packet.status = "CLOSED"
         if passed:
@@ -468,6 +470,24 @@ class ModelRegistry:
         rec = self.get_version(version_id)
         if rec["state"] != STATE_APPROVED:
             raise RegistryError(f"deployment gate closed for state={rec['state']}")
+        # The registry is the SOLE promotion authority. Re-run the full
+        # governance gate set (identity, SoD, crypto, trust eligibility,
+        # environment, policy) so every caller — CLI, API, supervisor, and
+        # autonomous self-healing — is subject to the same checks, not only
+        # the DeploymentService request path. This closes the autonomous
+        # deploy bypass where registry.deploy() enforced no SoD / environment
+        # / policy validation.
+        from qsmlops.serving.deployment import DeploymentService
+
+        DeploymentService(self).validate(version_id, actor, "production")
+        # Deactivate any previously active deployment for this model so the
+        # active flag stays exclusive (defensive data consistency).
+        self._conn.execute(
+            "UPDATE deployments SET active=0 WHERE active=1 AND version_id IN "
+            "(SELECT version_id FROM model_versions WHERE model_name=?)",
+            (rec["model_name"],),
+        )
+        self._conn.commit()
         deployment_id = uuid.uuid4().hex
         packet = VerificationPacket.create(
             objective=f"deploy {rec['model_name']} v{rec['version']}",

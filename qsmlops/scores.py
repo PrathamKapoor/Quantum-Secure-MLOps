@@ -227,7 +227,13 @@ def evaluate_trust(
         signature_valid = False
         signer_status = "unknown"
     else:
-        signature_valid = bool(passport.verify_signature(keystore)) if keystore else False
+        try:
+            signature_valid = bool(passport.verify_signature(keystore)) if keystore else False
+        except Exception:
+            # A signature/key error must fail CLOSED (block), never propagate
+            # into an unhandled exception that would mask a hard crypto failure.
+            signature_valid = False
+            blocking.append("passport_signature_invalid")
         if not signature_valid:
             blocking.append("passport_signature_invalid")
         try:

@@ -140,22 +140,28 @@ class Passport:
             record = keystore.get_record(self.signature.signer_key_id)
         except KeyError:
             return False
-        if record.status == "revoked":
-            return False
-        if record.public_key_hex != _public_of(keystore, self.signature.signer_key_id):
+        if record.status in ("revoked", "expired"):
             return False
         provider = SIGNATURE_PROVIDERS.get(record.algorithm_id)
         if provider is None:
             return False
-        public_key = keystore.trusted_public_key(self.signature.signer_key_id)
+        try:
+            public_key = keystore.trusted_public_key(self.signature.signer_key_id)
+        except Exception:
+            # Expired/unknown key records surface here; treat as invalid rather
+            # than propagating an exception (fail-closed, never fail-open).
+            return False
         recomputed = self.digest()
         if recomputed != self.signature.signed_digest:
             return False
-        return provider.verify(
-            public_key,
-            recomputed.encode(),
-            bytes.fromhex(self.signature.signature_hex),
-        )
+        try:
+            return provider.verify(
+                public_key,
+                recomputed.encode(),
+                bytes.fromhex(self.signature.signature_hex),
+            )
+        except Exception:
+            return False
 
     def add_deployment_event(self, event: dict) -> "Passport":
         """Returns a new unsigned passport carrying the appended history.
