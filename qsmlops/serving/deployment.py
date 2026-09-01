@@ -117,8 +117,11 @@ class DeploymentService:
             expired = getattr(key_rec, "is_expired", lambda: False)()
             check("signer_key_usable", signer_status == "active" and not expired,
                   f"status={signer_status}")
-        except KeyError:
-            check("signer_key_usable", False, "signer key absent from trust anchors")
+        except (KeyError, AttributeError):
+            # S5: a malformed signer/key interface (missing record attribute)
+            # must fail closed the same way an absent key does — never an
+            # unexpected crash or accidental acceptance.
+            check("signer_key_usable", False, "signer key absent or malformed in trust anchors")
 
         # 4. trust eligibility — recomputed FRESH at deploy time. We never reuse
         #    a cached `latest_trust` decision here: a trust evaluation captured

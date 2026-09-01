@@ -77,8 +77,23 @@ class DataAgent(BaseAgent):
                     recommendation="ESCALATE" if not ok else "",
                 )
             )
-        failed_critical = any(not f.passed and f.severity == "CRITICAL" for f in findings)
-        rec = "QUARANTINE" if failed_critical else "ACCEPT"
+        # Derive the recommendation from the worst failing severity so a HIGH
+        # finding can never be silently downgraded to ACCEPT (fail-closed).
+        # CRITICAL dataset/preprocessing corruption quarantines; any other
+        # failed integrity check escalates for human review; only a fully
+        # clean sweep is ACCEPT. UNAVAILABLE evidence stays honest because the
+        # findings that encode it (e.g. missing datasets) carry HIGH severity.
+        _SEV_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+        failed = [f for f in findings if not f.passed]
+        if not failed:
+            rec = "ACCEPT"
+        else:
+            worst = max(
+                (f.severity for f in failed if f.severity in _SEV_ORDER),
+                key=lambda s: _SEV_ORDER[s],
+                default="HIGH",
+            )
+            rec = "QUARANTINE" if worst == "CRITICAL" else "ESCALATE"
         return Observation(
             agent=self.name,
             subject_id=context.get("subject_id", ""),

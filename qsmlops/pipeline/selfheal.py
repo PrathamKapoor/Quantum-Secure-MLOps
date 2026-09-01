@@ -579,7 +579,12 @@ class SelfHealingMLOps:
         ref = np.asarray(ds.X, dtype=float)
         cur = np.asarray(current_data, dtype=float)
         if cur.ndim != 2 or cur.shape[1] != ref.shape[1]:
-            return [], {"status": "FEATURE_MISMATCH", "max_severity": "NONE", "drift_count": 0}
+            # S4: a wrong-shaped production input is a real mismatch, not a
+            # healthy "no drift" result. Surface it as MEDIUM so monitoring
+            # alerts rather than silently passing (fail-closed).
+            return [], {"status": "FEATURE_MISMATCH", "max_severity": "MEDIUM",
+                        "drift_count": 1,
+                        "by_type": {"feature_mismatch": 1}}
         ref_preds = self._predict_matrix(model_name, ref)
         cur_preds = self._predict_matrix(model_name, cur)
         engine.set_reference(ref, predictions=ref_preds, metrics=dict(passport.metrics),

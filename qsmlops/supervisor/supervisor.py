@@ -21,13 +21,12 @@ from qsmlops.evidence.ledger import EvidenceLedger
 from qsmlops.evidence.packet import SecurityCheck, VerificationPacket
 from qsmlops.registry.registry import ModelRegistry
 from qsmlops.scores import compute_scores
-from qsmlops.supervisor.validation import sanitise_all
+from qsmlops.supervisor.validation import ValidationReport, validate_observation
 from qsmlops.supervisor.decisions import (
     Decision,
     DecisionReport,
     SupervisorPolicy,
     aggregate_risk,
-    observation_risk,
 )
 from qsmlops.supervisor.learning import LearningStore
 from qsmlops.supervisor.policy import (
@@ -51,6 +50,36 @@ def action_handler(decision: Decision):
         return fn
 
     return deco
+
+
+# C1: Agents may emit advisory / non-Decision recommendation strings
+# (BLOCK, REVIEW, INVESTIGATE, OPTIMIZE, MONITOR, EVALUATE_TRUST,
+# REVIEW_SUPPLY_CHAIN). These are NOT decision conflicts. BLOCK is a genuine
+# governance signal and maps to BLOCK_DEPLOYMENT; pure advisory strings
+# collapse to ADVISORY (excluded from the supervisor's conflict tally); any
+# unrecognised string fails closed to ESCALATE.
+_DECISION_RECOMMENDATIONS = {d.value for d in Decision}
+_ADVISORY_RECOMMENDATIONS = {
+    "REVIEW", "INVESTIGATE", "OPTIMIZE", "MONITOR",
+    "EVALUATE_TRUST", "REVIEW_SUPPLY_CHAIN",
+}
+_RECOMMENDATION_MAP = {
+    "BLOCK": Decision.BLOCK_DEPLOYMENT.value,
+}
+
+
+def _normalize_recommendation(rec: str) -> str:
+    if rec in _DECISION_RECOMMENDATIONS:
+        return rec
+    if rec in _RECOMMENDATION_MAP:
+        return _RECOMMENDATION_MAP[rec]
+    if rec in _ADVISORY_RECOMMENDATIONS:
+        return "ADVISORY"
+    if not rec:
+        return ""
+    # Unrecognized recommendation string: fail closed to ESCALATE rather than
+    # silently ignoring it.
+    return Decision.ESCALATE.value
 
 
 class _NoOpLearner:
@@ -149,25 +178,62 @@ class AdaptiveSupervisor:
                 )
             # Phase 10 evidence-validation engine (fail-safe sanitisation).
             clean, report = None, None
-            from qsmlops.supervisor.validation import validate_observation
-            clean, report = validate_observation(obs)
+            # T1: even the validator itself must not be able to crash the
+            # supervisor loop or silently drop evidence. If validation raises,
+            # replace the observation with a structured HIGH/ESCALATE marker so
+            # the fail-closed model is preserved.
+            try:
+                clean, report = validate_observation(obs)
+            except Exception as exc:
+                from qsmlops.agents.base import Finding
+
+                agent_name = getattr(obs, "name", "<unknown>")
+                clean = Observation(
+                    agent=agent_name,
+                    subject_id=context.get("subject_id", ""),
+                    recommendation="ESCALATE",
+                    findings=[Finding(
+                        "observation_validation", False, "HIGH",
+                        detail=f"validation crashed: {type(exc).__name__}: {exc}",
+                        observation="observation validation failed",
+                        confidence=1.0, recommendation="ESCALATE",
+                    )],
+                    notes=f"validation crashed: {type(exc).__name__}: {exc}",
+                )
+                report = ValidationReport(
+                    agent=agent_name,
+                    problems=[f"validation raised: {exc}"],
+                )
             self._last_validation.append(report.to_dict())
-            _orig_count = len(getattr(obs, "findings", []) or [])
-            if len(clean.findings) < _orig_count:
-                # Validation silently dropped malformed findings; replace the
-                # lost evidence with an explicit failed marker so the agent's
-                # output is not weaker after sanitisation (fail-closed).
+            # C2: the dropped-evidence marker fires ONLY when validation
+            # actually DROPPED findings (invalid name/severity/passed), never
+            # on benign de-duplication (which is counted separately and keeps
+            # the first occurrence). A dropped finding means evidence was
+            # lost, so we replace it with an explicit failed marker rather
+            # than letting the agent's output become weaker (fail-closed).
+            if report.dropped > 0:
                 from qsmlops.agents.base import Finding
 
                 clean.findings.append(Finding(
                     "evidence_validation", False, "HIGH",
                     detail=("validation dropped "
-                            f"{_orig_count - len(clean.findings)} finding(s): "
+                            f"{report.dropped} finding(s): "
                             + "; ".join(report.problems[:3])),
                     observation="observation failed evidence validation",
                     confidence=1.0, recommendation="ESCALATE",
                 ))
+                # S3: the dropped-evidence marker must also flip the
+                # observation-level recommendation to ESCALATE so the
+                # supervisor's reason() path (which reads obs.recommendation)
+                # cannot accidentally ACCEPT after evidence loss (fail-closed).
+                clean.recommendation = "ESCALATE"
             observations.append(clean)
+        # C1: normalise recommendation strings AFTER validation so advisory
+        # values (REVIEW/INVESTIGATE/OPTIMIZE/MONITOR/... ) do not inflate the
+        # decision-conflict count in reason(), while BLOCK becomes the genuine
+        # BLOCK_DEPLOYMENT decision and unrecognised strings fail closed.
+        for obs in observations:
+            obs.recommendation = _normalize_recommendation(obs.recommendation)
         return observations
 
     # ---------------- Detect + Reason ----------------
@@ -281,7 +347,7 @@ class AdaptiveSupervisor:
             decision = Decision.BLOCK_DEPLOYMENT
             rationale_parts.append(f"deployment gate {gate_block.rule_name!r} closed")
 
-        if len(recs - {"ACCEPT"}) > 2 and decision == Decision.ACCEPT:
+        if len(recs - {"ACCEPT", "ADVISORY"}) > 2 and decision == Decision.ACCEPT:
             decision = Decision.ESCALATE
             rationale_parts.append("conflicting agent recommendations require human review")
 

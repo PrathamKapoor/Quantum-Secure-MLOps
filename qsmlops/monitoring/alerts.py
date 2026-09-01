@@ -61,12 +61,17 @@ def evaluate(
     mse = metrics.get("mse")
     r2_bad = r2 is not None and math.isfinite(r2) and r2 < thresholds["min_r2"]
     mse_bad = mse is not None and math.isfinite(mse) and mse > thresholds["max_mse"]
-    if r2_bad or mse_bad:
+    # C3: a negative MSE is mathematically impossible and must NOT be read as
+    # healthy — emit a fail-closed PERFORMANCE_DEGRADED alert (HIGH unless a
+    # genuine critical degradation is also present).
+    mse_negative = mse is not None and math.isfinite(mse) and mse < 0
+    if r2_bad or mse_bad or mse_negative:
         level = "CRITICAL" if (r2_bad and mse_bad) else "HIGH"
         alerts.append(Alert(
             level, "PERFORMANCE_DEGRADED", model_id,
             detail=(f"r2={r2} (min {thresholds['min_r2']}), "
-                    f"mse={mse} (max {thresholds['max_mse']})"),
+                    f"mse={mse} (max {thresholds['max_mse']})"
+                    + ("; NEGATIVE MSE is invalid" if mse_negative else "")),
         ))
     if (r2 is not None and not math.isfinite(r2)) or (mse is not None and not math.isfinite(mse)):
         # Non-finite metrics are a real degradation signal — alert rather

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import warnings
 from dataclasses import dataclass, field
 from typing import Optional
@@ -87,7 +88,25 @@ class PSIDriftDetector:
         for i in range(n_features):
             psi_score = self.compute_psi(reference_data[:, i], current_data[:, i])
             feature_name = feature_names[i] if i < len(feature_names) else f"feature_{i}"
-            
+
+            # S4: a non-finite PSI means the score cannot be computed (NaN /
+            # empty / corrupted columns). Do NOT fabricate a healthy "no drift"
+            # result — surface it as an indeterminate MEDIUM signal instead.
+            if not math.isfinite(psi_score):
+                reports.append(DriftReport(
+                    drift_type="feature_drift_psi_error",
+                    affected_features=[feature_name],
+                    severity="MEDIUM",
+                    score=0.0,
+                    threshold=self.config.psi_threshold,
+                    evidence={"error": "non-finite PSI", "feature": feature_name},
+                    recommendation="INVESTIGATE",
+                    confidence=0.9,
+                    details=f"PSI drift test produced a non-finite result for "
+                            f"{feature_name!r}; treated as indeterminate",
+                ))
+                continue
+
             severity = "LOW"
             if psi_score > self.config.psi_threshold * 2:
                 severity = "CRITICAL"
@@ -95,7 +114,7 @@ class PSIDriftDetector:
                 severity = "HIGH"
             elif psi_score > self.config.psi_threshold * 0.5:
                 severity = "MEDIUM"
-            
+
             if psi_score > self.config.psi_threshold * 0.5:
                 reports.append(DriftReport(
                     drift_type="feature_drift_psi",
@@ -108,7 +127,7 @@ class PSIDriftDetector:
                     confidence=0.9,
                     details=f"PSI={psi_score:.4f} for {feature_name} (threshold={self.config.psi_threshold})"
                 ))
-        
+
         return reports
 
 
@@ -124,36 +143,65 @@ class KSDriftDetector:
         n_features = min(reference_data.shape[1], current_data.shape[1])
         
         for i in range(n_features):
+            feature_name = feature_names[i] if i < len(feature_names) else f"feature_{i}"
             try:
                 ks_stat, p_value = stats.ks_2samp(reference_data[:, i], current_data[:, i])
-                feature_name = feature_names[i] if i < len(feature_names) else f"feature_{i}"
-                
-                severity = "LOW"
-                if p_value < self.config.ks_threshold / 10:
-                    severity = "CRITICAL"
-                elif p_value < self.config.ks_threshold:
-                    severity = "HIGH"
-                elif p_value < self.config.ks_threshold * 2:
-                    severity = "MEDIUM"
-                
-                if p_value < self.config.ks_threshold * 2:
-                    reports.append(DriftReport(
-                        drift_type="feature_drift_ks",
-                        affected_features=[feature_name],
-                        severity=severity,
-                        score=float(ks_stat),
-                        threshold=self.config.ks_threshold,
-                        evidence={"ks_statistic": float(ks_stat), "p_value": float(p_value)},
-                        recommendation="RETRAIN" if severity in ("HIGH", "CRITICAL") else "MONITOR",
-                        confidence=1.0 - p_value,
-                        details=f"KS={ks_stat:.4f}, p={p_value:.4f} for {feature_name}"
-                    ))
             except Exception:
-                # A failing KS test on a single feature must not silently
-                # vanish; record it so operators can investigate.
-                logging.getLogger(__name__).warning(
-                    "KS drift test failed for feature %r; skipped", feature_name, exc_info=True)
-        
+                # S4: a failing KS test on a single feature must not silently
+                # vanish; record it as an indeterminate MEDIUM signal so it
+                # reaches get_summary -> alerting (fail-closed).
+                reports.append(DriftReport(
+                    drift_type="feature_drift_error",
+                    affected_features=[feature_name],
+                    severity="MEDIUM",
+                    score=0.0,
+                    threshold=self.config.ks_threshold,
+                    evidence={"error": "KS test raised", "feature": feature_name},
+                    recommendation="INVESTIGATE",
+                    confidence=0.9,
+                    details=f"KS drift test failed for feature {feature_name!r}; "
+                            f"treated as indeterminate",
+                ))
+                continue
+
+            # S4: non-finite KS output (e.g. NaN inputs) must not be read as a
+            # clean "no drift" result — surface it as indeterminate MEDIUM.
+            if not math.isfinite(p_value) or not math.isfinite(ks_stat):
+                reports.append(DriftReport(
+                    drift_type="feature_drift_error",
+                    affected_features=[feature_name],
+                    severity="MEDIUM",
+                    score=0.0,
+                    threshold=self.config.ks_threshold,
+                    evidence={"error": "non-finite KS statistic", "feature": feature_name},
+                    recommendation="INVESTIGATE",
+                    confidence=0.9,
+                    details=f"KS drift test produced a non-finite result for "
+                            f"{feature_name!r}; treated as indeterminate",
+                ))
+                continue
+
+            severity = "LOW"
+            if p_value < self.config.ks_threshold / 10:
+                severity = "CRITICAL"
+            elif p_value < self.config.ks_threshold:
+                severity = "HIGH"
+            elif p_value < self.config.ks_threshold * 2:
+                severity = "MEDIUM"
+
+            if p_value < self.config.ks_threshold * 2:
+                reports.append(DriftReport(
+                    drift_type="feature_drift_ks",
+                    affected_features=[feature_name],
+                    severity=severity,
+                    score=float(ks_stat),
+                    threshold=self.config.ks_threshold,
+                    evidence={"ks_statistic": float(ks_stat), "p_value": float(p_value)},
+                    recommendation="RETRAIN" if severity in ("HIGH", "CRITICAL") else "MONITOR",
+                    confidence=1.0 - p_value,
+                    details=f"KS={ks_stat:.4f}, p={p_value:.4f} for {feature_name}"
+                ))
+
         return reports
 
 
@@ -279,12 +327,30 @@ class DriftDetectionEngine:
     def detect_all(self, current_data: np.ndarray, current_predictions: np.ndarray = None,
                    current_metrics: dict = None) -> list[DriftReport]:
         all_reports = []
-        
+
         if self.reference_data is not None:
+            ref = self.reference_data
+            cur = np.asarray(current_data) if current_data is not None else None
+            # S4: empty reference or current data cannot yield a valid drift
+            # score. Do NOT report "healthy"; surface it as indeterminate MEDIUM
+            # so monitoring alerts instead of silently passing (fail-closed).
+            if ref.shape[0] == 0 or (cur is not None and cur.shape[0] == 0):
+                all_reports.append(DriftReport(
+                    drift_type="drift_indeterminate",
+                    affected_features=[],
+                    severity="MEDIUM",
+                    score=0.0,
+                    threshold=0.0,
+                    evidence={"reason": "empty reference or current data"},
+                    recommendation="INVESTIGATE",
+                    confidence=1.0,
+                    details="drift cannot be computed: empty reference or current data",
+                ))
+                return all_reports
             all_reports.extend(self.psi_detector.detect(
-                self.reference_data, current_data, self.feature_names))
+                ref, current_data, self.feature_names))
             all_reports.extend(self.ks_detector.detect(
-                self.reference_data, current_data, self.feature_names))
+                ref, current_data, self.feature_names))
         
         if self.reference_predictions is not None and current_predictions is not None:
             all_reports.extend(self.prediction_detector.detect(

@@ -77,11 +77,11 @@ def verify(ctx, version_id):
     _dump(result)
 
 
-@cli.command()
+@cli.command("approve-and-deploy")
 @click.option("--version-id", required=True)
 @click.pass_context
-def approve(ctx, version_id):
-    """Trust-gated approval and deployment of a verified version."""
+def approve_and_deploy(ctx, version_id):
+    """Governed approval AND deployment of a verified version (promotes to DEPLOYED)."""
     pipeline = ctx.obj["pipeline"]
     try:
         dep_id = pipeline.approve_and_deploy(version_id)
@@ -89,6 +89,24 @@ def approve(ctx, version_id):
         _dump({"approval": "DENIED", "reason": str(exc)})
         sys.exit(1)
     _dump({"deployment_id": dep_id, "status": "deployed", "approved": True})
+
+
+@cli.command()
+@click.option("--version-id", required=True)
+@click.pass_context
+def approve(ctx, version_id):
+    """DEPRECATED alias for `approve-and-deploy` (approval + deployment).
+
+    Retained for backward compatibility only. Emits a warning and delegates to
+    the explicit `approve-and-deploy` command so the legacy behaviour is
+    preserved while pointing operators at the clearer surface.
+    """
+    click.echo(
+        "WARNING: `approve` is deprecated; use `approve-and-deploy` "
+        "(it performs BOTH approval and deployment).",
+        err=True,
+    )
+    ctx.invoke(approve_and_deploy, version_id=version_id)
 
 
 @cli.command()

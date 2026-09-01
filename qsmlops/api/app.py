@@ -31,10 +31,16 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from qsmlops import __version__ as QSMLOPS_VERSION
 from qsmlops.pipeline.selfheal import SelfHealingMLOps
 from qsmlops.serving.deployment import DeploymentError
 from qsmlops.serving.service import ModelDeploymentService
-from qsmlops.registry.registry import ACTIVE_STATES, RegistryError
+from qsmlops.registry.registry import (
+    ACTIVE_STATES,
+    RegistryError,
+    STATE_REVOKED,
+    STATE_ROLLED_BACK,
+)
 from qsmlops.scores import compute_scores
 
 
@@ -180,7 +186,13 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
     @app.post("/registry/revoke/{version_id}")
     def registry_revoke(version_id: str, body: RevokeRequest) -> dict:
         _require_version(version_id)
-        pipeline.registry.revoke(version_id, body.actor, body.reason)
+        # C6: an illegal registry transition (e.g. revoking an already-revoked
+        # or rolled-back version) must return a structured 409 conflict, not a
+        # 500. The governance reason is preserved in the detail.
+        try:
+            pipeline.registry.revoke(version_id, body.actor, body.reason)
+        except RegistryError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         return {
             "version_id": version_id,
             "state": pipeline.registry.get_version(version_id)["state"],
@@ -458,6 +470,6 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
 
 def create_app(pipeline: SelfHealingMLOps) -> FastAPI:
     """Standalone dashboard app (kept for backward compatibility)."""
-    app = FastAPI(title="qsmlops dashboard", version="0.2.0")
+    app = FastAPI(title="qsmlops dashboard", version=QSMLOPS_VERSION)
     register_dashboard_routes(app, pipeline)
     return app

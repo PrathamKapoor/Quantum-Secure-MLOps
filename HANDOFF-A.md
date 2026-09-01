@@ -328,3 +328,96 @@ documented spec-driven change, not a regression mask), HANDOFF-A.md.
 
 ## Phase 11 readiness — exact entry point
 None. Per directive: STOP after Phase 10. Do NOT start Phase 11 without owner signal.
+
+# SESSION ADDENDUM 6 — Phase 11 Forensic Reconstruction (BLOCKER)
+
+An exhaustive six-hour forensic reconstruction of Phase 11 was performed
+(read-only): full working-tree docs sweep, `git log --all` (13 commits),
+`git tag` (`forensic/corpse-archive`, `forensic/pre-split`), `git grep` across
+both forensic refs, test-suite scan, and sibling-repo boundary re-check.
+
+**Verdict: Phase 11 CANNOT be reconstructed from authoritative QSMLOps
+evidence.** `PART 14 §14.3` is defined only for Phases 1–10 (no §14.3 PHASE 11,
+no PART 21 STAGE 11). `DELIVERABLE.md` "Future Roadmap" uses a *separate*
+quarter-based label set (Production Hardening / ML Framework / Advanced
+Security / Platform Features) and is NOT mapped to "Phase 11". Git history
+contains no Phase-11 commit/branch/tag/stub. No Phase-11 test scaffold exists.
+The only "Phase 11" text in the forensic refs is FOREIGN Guardrailed material
+(`docs/productization/research_boundary.md`: RTS-GMLC "Phase 11-19"),
+explicitly off-limits.
+
+Per the mandate's §16, implementation was NOT performed and a fake Phase 11 was
+NOT invented. Full evidence trail: `docs/PHASE_11_FORENSIC_BLOCKER.md`.
+
+Repository state unchanged: HEAD `3e494da`, 271 passed, compileall clean, demo
+`Chain OK: True`, contamination clean, REPO-B (`guardrailed-product`) untouched
+at `bc835e3`. The 26 staged renames from the earlier Guardrailed-residue
+isolation task remain intentionally uncommitted (not Phase-11 work).
+
+To unblock: supply the authoritative `PART 14 §14.x PHASE 11` source, or a
+concrete bounded scope statement, or confirm a selected Future-Roadmap subset
+is to be treated as "Phase 11".
+
+---
+
+# SESSION ADDENDUM — Workstream A1 (HSM PKCS#11 Backend Operationalization)
+
+**Forensic premise:** A previous claim “Workstream A1 — HSM Backend Implementation complete”
+was certified as **UN-CERTIFIED**: `PKCS11Backend` did not exist, `create_hsm_backend({'use_hsm': True})`
+silently returned `SoftwareFallbackBackend`, no HSM tests, `python-pkcs11` not declared.
+Reference: this workstream’s mission brief §§ PHASE 0–23.
+
+**Directive:** Not Phase 11/12; a specifically authorized post-roadmap hardening workstream
+A1 that turns the non-certifiable HSM *architecture* into the strongest honest
+operational implementation without creating a parallel crypto authority and without
+pretending a mock is a physical HSM.
+
+**Entry baseline (forensic):** 271 core tests (pre-A1 HEAD `3e494da` + post-roadmap hardening),
+`compileall` clean, `demo.py` SUCCESS, `qsmlops/crypto/hsm.py` = abstraction only
+(`PKCS11Backend` absent, factory returned `SoftwareFallbackBackend` on `use_hsm=True`).
+
+**Exit state:** **368 collected (271 prior + 61 A1 + 36 pre-existing hardening)**, all
+partitioned runs green (full-suite wall time exceeds the 120 s single-call tool budget,
+hence partitioned verification), `compileall` clean, `demo.py` SUCCESS, `Chain OK: True`,
+`python-pkcs11` declared, no Guardrailed contamination, REPO-B untouched.
+
+## Implemented (extend-only)
+
+* `qsmlops/crypto/hsm.py` — operational `PKCS11Backend` (895 lines):
+  `pkcs11.lib` token/slot discovery, session management, ML-DSA
+  (`ML-DSA-44/65/87` via `KeyType.ML_DSA` / `MLDSAParameterSet`),
+  real `sign`/`verify` via `SignMixin`/`VerifyMixin`, honest `health_check`,
+  explicit `HSMUnsupportedMechanismError` for ML-KEM (no `ML_KEM` in `python-pkcs11` 0.9.5),
+  fail-closed `create_hsm_backend` (never falls back when `use_hsm=True`),
+  PIN-redacted `__repr__`, no private extraction outside mock fixture.
+  `SoftwareFallbackBackend` kept honest (`required_mechanisms_available=False`, `sign` raises).
+* `qsmlops/crypto/keys.py` — fix `generate_keypair` to detect explicit `PKCS11Backend`
+  vs software fallback, fail-closed HSM path, use `HSMKeyInfo.public_key_hex`,
+  no secret serialization for `hsm_backed=True`.
+* `qsmlops/passport/passport.py` — fix `sign` to detect HSM-backed active signer
+  via `list_records` before `active_signing_key` (which must raise for HSM keys) and
+  route to `sign_with_hsm`; verification already routes via `verify_with_hsm`.
+* `pyproject.toml` / `requirements.txt` — add `python-pkcs11>=0.9.0` (+ `pydantic` alignment).
+
+## Tests created
+
+`tests/test_hsm_backend.py` (36), `tests/test_hsm_fail_closed.py` (12),
+`tests/test_hsm_integration.py` (13) — **61 dedicated A1 tests**.  Mock fixture
+(`PKCS11Backend({"mock": True})` / `QSMLOPS_HSM_MOCK=1`) performs **real**
+Dilithium signing/verification via `dilithium-py` but is labelled
+`"mock backend (test fixture; not a production HSM)"` in every health `details`.
+No test claims physical-HSM validation.  Real-token path is implemented against the
+actual `python-pkcs11` API and fails closed when no token is present.
+
+## Certification gates A–N
+
+A ✅ (backend exists) · B ✅ (selector fail-closed) · C ✅ (fail closed) ·
+D ✅ (key boundary) · E ✅ mock / ENV-LIMITED real · F ✅ (verification) ·
+G ✅ (passport) · H ✅ (keystore) · I ✅ (dependency) · J ✅ (61 tests) ·
+K ✅ (regression) · L ✅ (no leakage / no silent fallback) · M ✅ (no contamination) ·
+N ✅ (doc distinguishes IMPLEMENTED / ENVIRONMENT-LIMITED)
+
+**Final status: IMPLEMENTED BUT ENVIRONMENT-LIMITED** — `PKCS11Backend` is genuinely
+implemented, fail-closed semantics work, 61 HSM tests pass, software fallback remains
+correct, but physical HSM interoperability cannot be exercised on this Windows host
+(no SoftHSM2 / vendor library).  Full report: `docs/HSM_IMPLEMENTATION.md`.

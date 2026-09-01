@@ -28,7 +28,8 @@ class EvidenceLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
-    def _entries(self) -> list[dict]:
+    def _raw_lines(self) -> list[str]:
+        """Return every non-empty physical line of the ledger file."""
         if not self.path.exists():
             return []
         out = []
@@ -36,7 +37,23 @@ class EvidenceLedger:
             for line in fh:
                 line = line.strip()
                 if line:
-                    out.append(json.loads(line))
+                    out.append(line)
+        return out
+
+    def _entries(self) -> list[dict]:
+        """Parse every valid ledger line.
+
+        T3: a malformed line must NOT crash the read path or silently vanish
+        without a trace — it is skipped here (so valid entries around it are
+        preserved and the chain can still be traversed) and is reported
+        explicitly by :meth:`verify_chain`. No existing entry is mutated or
+        'repaired'."""
+        out = []
+        for line in self._raw_lines():
+            try:
+                out.append(json.loads(line))
+            except (ValueError, json.JSONDecodeError):
+                continue
         return out
 
     def append(self, record: dict) -> dict:
@@ -70,7 +87,15 @@ class EvidenceLedger:
         )
 
     def verify_chain(self) -> tuple[bool, str]:
-        entries = self._entries()
+        # T3: first detect physically malformed lines — corruption must be
+        # reported explicitly rather than masked by the skip-on-read path.
+        raw = self._raw_lines()
+        for i, line in enumerate(raw):
+            try:
+                json.loads(line)
+            except (ValueError, json.JSONDecodeError):
+                return False, f"corrupted ledger line at entry {i} (malformed JSON)"
+        entries = [json.loads(line) for line in raw]
         prev = GENESIS_PREV
         for i, e in enumerate(entries):
             if e["prev_hash"] != prev:

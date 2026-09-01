@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from qsmlops.crypto.keys import KeyStore
+from qsmlops.crypto.keys import KeyStore, STATUS_ACTIVE
 
 VAULT_VERSION = 1
 DEFAULT_ITERATIONS = 600_000
@@ -65,16 +65,20 @@ def _open(doc: dict, passphrase: str) -> bytes:
 
 
 class EncryptedKeyStore(KeyStore):
-    """A KeyStore whose secret-key file is an encrypted AEAD vault."""
+    """A KeyStore whose secret-key file is an encrypted AEAD vault.
+    
+    Supports HSM-backed keys where secret key material never leaves the HSM.
+    """
 
     def __init__(
         self,
         keys_dir: Path,
         passphrase: str | None = None,
         iterations: int = DEFAULT_ITERATIONS,
+        hsm_backend=None,
     ) -> None:
         self._iterations = iterations
-        super().__init__(keys_dir)
+        super().__init__(keys_dir, hsm_backend=hsm_backend)
         self._vault_path = self.keys_dir / "secret_keys.vault"
         self._secrets_cache: dict | None = None
         self._last_passphrase: str | None = None
@@ -201,11 +205,14 @@ class EncryptedKeyStore(KeyStore):
 
     def active_signing_key(self, owner: str) -> tuple[str, bytes]:
         recs = [
-            r for r in self.list_records(role="SIGNER")
-            if r.owner == owner and r.status == "active" and not r.is_expired()
+            r
+            for r in self.list_records(role="SIGNER")
+            if r.owner == owner and r.status == STATUS_ACTIVE
         ]
         if not recs:
             raise ProviderError(f"no active signing key for {owner!r}")
         key_id = recs[0].key_id
+        if recs[0].hsm_backed:
+            raise ProviderError(f"active signing key {key_id} is HSM-backed; use HSM backend directly")
         sk_hex = self._ensure_unlocked()[key_id]["secret_key_hex"]
         return key_id, bytes.fromhex(sk_hex)

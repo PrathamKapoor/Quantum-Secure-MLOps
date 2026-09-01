@@ -151,7 +151,6 @@ class TelemetryCollector:
         self, model_id: str, attribution_rows: list[dict], source: str = "drift_engine",
     ) -> int:
         """Persist one row per drifting feature (Phase 8)."""
-        from qsmlops.crypto.hashing import canonical_json  # noqa: F401  (style parity)
         n = 0
         check_ts = time.time()
         for row in attribution_rows:
@@ -188,10 +187,16 @@ class TelemetryCollector:
                 "reason": f"need >= {min_history} observations, have {total}",
                 "window": window,
             }
-        recent = series[-window:]
-        prior = series[:-len(recent)] if len(recent) < total else []
-        if not prior:
-            # Not enough history to build a prior baseline: cannot assess
+        recent = series[-window:] if window > 0 else series[:]
+        prior = series[:-window] if window > 0 else []
+        # T4: the baseline is sufficient only when the PRIOR history (the
+        # observations lying outside the recent window) holds at least
+        # `min_history` points. This accounts for the recent window, the prior
+        # window and min_history together, instead of merely requiring "any"
+        # prior observation. The recent window is used for the comparison; the
+        # prior window is the reference baseline.
+        if len(prior) < min_history:
+            # Not enough prior history to build a baseline: cannot assess
             # degradation, so the baseline is explicitly NOT sufficient
             # (fail-closed rather than falsely reporting "healthy").
             return {
@@ -200,8 +205,9 @@ class TelemetryCollector:
                 "window": len(recent),
                 "sufficient": False,
                 "reason": (
-                    f"need > {window} observations to establish a prior baseline "
-                    f"(have {total}); degradation cannot yet be assessed"
+                    f"need >= {min_history} prior observations (outside the "
+                    f"recent window of {len(recent)}) to establish a baseline; "
+                    f"have {len(prior)}"
                 ),
             }
         recent_mean = statistics.fmean(recent)

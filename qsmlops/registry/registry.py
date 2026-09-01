@@ -582,6 +582,52 @@ class ModelRegistry:
             decision="ROLLBACK",
             status="CLOSED",
         )
+        # S1: rollback re-promotion MUST use the same authoritative deployment
+        # governance gate as a normal deploy. The registry remains the sole
+        # promotion mechanism, but the promotion to DEPLOYED is only permitted
+        # after DeploymentService.validate passes every gate (identity, SoD,
+        # crypto, trust eligibility, environment, policy). This closes the
+        # rollback-as-deploy-bypass where a revoked-blocked version could be
+        # re-promoted without re-checking. There is exactly ONE deployment
+        # validation path: DeploymentService.validate (also used by deploy()).
+        from qsmlops.serving.deployment import DeploymentService
+
+        if previous is None:
+            # Single-version rollback: retire the active deployment (there is no
+            # prior version to restore). This mirrors the original state-machine
+            # behaviour — the model is left in ROLLED_BACK with no active
+            # deployment — while still recording the governance packet.
+            self._conn.execute(
+                "UPDATE deployments SET active=0 WHERE deployment_id=?",
+                (active["deployment_id"],),
+            )
+            self._conn.commit()
+            cur_state = self.get_version(active["version_id"])["state"]
+            if cur_state == STATE_DEPLOYED:
+                self.transition(
+                    active["version_id"], STATE_ROLLED_BACK, fail_packet,
+                    reason="rolled back",
+                )
+            self.ledger.append_packet(fail_packet)
+            return None
+        prev_id = previous["version_id"]
+        validation = DeploymentService(self).validate(prev_id, actor, "production")
+        if not validation["eligible"]:
+            failed = [c["name"] for c in validation["checks"] if not c["passed"]]
+            self.ledger.append({
+                "type": "rollback_blocked",
+                "version_id": prev_id,
+                "model": model_name,
+                "actor": actor,
+                "reason": f"governance validation failed: {', '.join(failed)}",
+                "failed_checks": failed,
+            })
+            self.ledger.append_packet(fail_packet)
+            # A blocked rollback MUST leave production exactly as it was: the
+            # current active deployment stays active and no state is changed.
+            return None
+        # Only now that the previous version has cleared every governance gate
+        # do we deactivate the current deployment and restore the previous one.
         self._conn.execute(
             "UPDATE deployments SET active=0 WHERE deployment_id=?",
             (active["deployment_id"],),
@@ -592,10 +638,6 @@ class ModelRegistry:
             self.transition(
                 active["version_id"], STATE_ROLLED_BACK, fail_packet, reason="rolled back"
             )
-        if previous is None:
-            self.ledger.append_packet(fail_packet)
-            return None
-        prev_id = previous["version_id"]
         self.transition(prev_id, STATE_DEPLOYED, fail_packet, reason="restored by rollback")
         self._conn.execute(
             "INSERT INTO deployments (deployment_id, version_id, deployed_at, active, packet_id)"
@@ -618,6 +660,12 @@ class ModelRegistry:
         self.ledger.append_packet(packet)
 
     def revoke(self, version_id: str, actor: str, reason: str) -> None:
+        rec = self.get_version(version_id)
+        current = rec["state"]
+        if current in (STATE_REVOKED, STATE_ROLLED_BACK):
+            raise RegistryError(
+                f"cannot revoke version {version_id} in terminal state {current}"
+            )
         packet = VerificationPacket.create(
             objective=f"revoke {version_id}",
             actor=actor,

@@ -1,7 +1,10 @@
 """Model Deployment Service."""
 from __future__ import annotations
 import json
+import logging
 import pickle
+
+logger = logging.getLogger(__name__)
 
 class ServingError(Exception):
     pass
@@ -68,8 +71,15 @@ class ModelDeploymentService:
                 pass
             except ServingError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                # T6: an unexpected keystore error must not be silently
+                # swallowed — log it so the platform stays diagnosable. We
+                # still fall through to the signature-validity path below,
+                # which will surface the model as unverified rather than
+                # masking the failure.
+                logger.warning("keystore lookup failed for %s: %s",
+                               getattr(passport.signature, "signer_key_id", "?"),
+                               exc)
             # If the signature bytes are all zeros, treat as missing/invalid
             if passport.signature and set(passport.signature.signature_hex) == {"0"}:
                 raise KeyError("not found")

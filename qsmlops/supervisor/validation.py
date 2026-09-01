@@ -25,6 +25,7 @@ class ValidationReport:
     problems: list[str] = field(default_factory=list)
     duplicates_collapsed: int = 0
     confidences_clamped: int = 0
+    dropped: int = 0
 
     @property
     def ok(self) -> bool:
@@ -37,6 +38,7 @@ class ValidationReport:
             "problems": list(self.problems),
             "duplicates_collapsed": self.duplicates_collapsed,
             "confidences_clamped": self.confidences_clamped,
+            "dropped": self.dropped,
         }
 
 
@@ -87,14 +89,17 @@ def validate_observation(observation: Observation) -> tuple[Observation, Validat
         detail = getattr(f, "detail", "")
         if not isinstance(name, str) or not name.strip():
             report.problems.append(f"finding with invalid name: {name!r}")
+            report.dropped += 1
             continue
         if severity not in VALID_SEVERITIES:
             report.problems.append(
                 f"finding {name!r} has invalid severity {severity!r}")
+            report.dropped += 1
             continue
         if not isinstance(passed, bool):
             report.problems.append(
                 f"finding {name!r} has non-boolean 'passed' ({passed!r})")
+            report.dropped += 1
             continue
 
         key = (f.name, f.passed, getattr(f, "detail", ""))

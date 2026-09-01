@@ -5,6 +5,8 @@ identity, dataset provenance, training info, code version, environment,
 metrics, security status and deployment history into one signed object. The
 signature covers the document digest; verification always goes through the
 KeyStore trust anchors, never through presence of the file.
+
+Supports both software and HSM-backed signing/verification.
 """
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ from dataclasses import dataclass, field
 
 from qsmlops.crypto.agility import AgilityEngine
 from qsmlops.crypto.hashing import digest_document
+from qsmlops.crypto.hashing import sha3_hex
 from qsmlops.crypto.keys import KeyStore
 from qsmlops.crypto.providers import SIGNATURE_PROVIDERS, ProviderError
 
@@ -32,6 +35,7 @@ class SignatureBlock:
     signature_hex: str
     signed_digest: str
     signed_at: float
+    hsm_backed: bool = False  # True if signature was created by HSM
 
 
 @dataclass
@@ -76,6 +80,7 @@ class Passport:
                 "signature_hex": self.signature.signature_hex,
                 "signed_digest": self.signature.signed_digest,
                 "signed_at": self.signature.signed_at,
+                "hsm_backed": self.signature.hsm_backed,
             }
             if self.signature
             else None
@@ -105,8 +110,8 @@ class Passport:
 
     def sign(
         self,
-        keystore: KeyStore,
-        agility: AgilityEngine,
+        keystore: "KeyStore",
+        agility: "AgilityEngine",
         signer_owner: str,
         suite_id: str | None = None,
     ) -> None:
@@ -115,15 +120,51 @@ class Passport:
         suite = agility.select_suite(suite_id or agility.default_suite)
         agility.assert_usable(suite)
         provider = SIGNATURE_PROVIDERS[suite.signature_algorithm]
-        key_id, secret_key = keystore.active_signing_key(signer_owner)
-        record = keystore.get_record(key_id)
-        if record.algorithm_id != suite.signature_algorithm:
-            raise ProviderError(
-                f"active key {key_id} uses {record.algorithm_id}, "
-                f"suite requires {suite.signature_algorithm}"
-            )
-        doc_digest = self.digest()
-        sig = provider.sign(secret_key, doc_digest.encode())
+
+        # Determine the active signing key — HSM-backed keys cannot expose secret
+        # material, so we must detect HSM backing before attempting to fetch the
+        # secret.  Fail-closed: algorithm mismatch still blocks.
+        key_id: str | None = None
+        secret_key: bytes | None = None
+        record = None
+        hsm_backed = False
+
+        # Scan for active HSM-backed key first (covers mock and real HSM)
+        for rec in keystore.list_records(role="SIGNER"):
+            if rec.owner == signer_owner and rec.status == "active" and not rec.is_expired():
+                if rec.hsm_backed:
+                    key_id = rec.key_id
+                    record = rec
+                    hsm_backed = True
+                    break
+
+        if hsm_backed and key_id is not None:
+            # HSM-backed path: verify suite compatibility without needing secret
+            assert record is not None
+            if record.algorithm_id != suite.signature_algorithm:
+                raise ProviderError(
+                    f"active key {key_id} uses {record.algorithm_id}, "
+                    f"suite requires {suite.signature_algorithm}"
+                )
+            doc_digest = self.digest()
+            sig = keystore.sign_with_hsm(key_id, doc_digest.encode())
+        else:
+            # Software path (or no HSM key found)
+            key_id, secret_key = keystore.active_signing_key(signer_owner)
+            record = keystore.get_record(key_id)
+            if record.algorithm_id != suite.signature_algorithm:
+                raise ProviderError(
+                    f"active key {key_id} uses {record.algorithm_id}, "
+                    f"suite requires {suite.signature_algorithm}"
+                )
+            doc_digest = self.digest()
+            assert secret_key is not None
+            sig = provider.sign(secret_key, doc_digest.encode())
+            hsm_backed = bool(record.hsm_backed)
+            if hsm_backed:
+                # Should not happen via software path, but handle consistently
+                sig = keystore.sign_with_hsm(key_id, doc_digest.encode())
+        
         self.signature = SignatureBlock(
             suite_id=suite.suite_id,
             algorithm_id=suite.signature_algorithm,
@@ -131,9 +172,10 @@ class Passport:
             signature_hex=sig.hex(),
             signed_digest=doc_digest,
             signed_at=time.time(),
+            hsm_backed=hsm_backed,
         )
 
-    def verify_signature(self, keystore: KeyStore) -> bool:
+    def verify_signature(self, keystore: "KeyStore") -> bool:
         if self.signature is None:
             return False
         try:
@@ -155,11 +197,19 @@ class Passport:
         if recomputed != self.signature.signed_digest:
             return False
         try:
-            return provider.verify(
-                public_key,
-                recomputed.encode(),
-                bytes.fromhex(self.signature.signature_hex),
-            )
+            # Check if signature was HSM-backed
+            if self.signature.hsm_backed:
+                return keystore.verify_with_hsm(
+                    self.signature.signer_key_id,
+                    recomputed.encode(),
+                    bytes.fromhex(self.signature.signature_hex)
+                )
+            else:
+                return provider.verify(
+                    public_key,
+                    recomputed.encode(),
+                    bytes.fromhex(self.signature.signature_hex),
+                )
         except Exception:
             return False
 
@@ -210,6 +260,6 @@ def new_passport(
     )
 
 
-def _public_of(keystore: KeyStore, key_id: str) -> str:
+def _public_of(keystore: "KeyStore", key_id: str) -> str:
     rec = keystore._read_json(keystore._anchors_path)[key_id]
     return rec["public_key_hex"]
