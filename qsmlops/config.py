@@ -29,6 +29,11 @@ class PlatformConfig:
         return self.root / "ledger" / "evidence.jsonl"
 
     @property
+    def packet_store_path(self) -> Path:
+        """Content-addressed packet bodies (F1) — co-located with ledger."""
+        return self.ledger_path.parent / "packets"
+
+    @property
     def registry_path(self) -> Path:
         return self.root / "registry" / "registry.sqlite3"
 
@@ -64,6 +69,7 @@ class PlatformConfig:
             self.registry_path.parent,
             self.learning_path.parent,
             (self.root / "monitoring"),
+            self.packet_store_path,
         ):
             p.mkdir(parents=True, exist_ok=True)
 

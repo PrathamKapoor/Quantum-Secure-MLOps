@@ -384,6 +384,37 @@ def register_dashboard_routes(app: FastAPI, pipeline: SelfHealingMLOps) -> None:
                 "versions": len(versions),
                 "learner": pipeline.learner.summary()}
 
+    # ---------------- evidence packet retrieval (F1) ----------------
+    @app.get("/evidence/packet/{packet_id}")
+    def get_evidence_packet(packet_id: str) -> dict:
+        """Retrieve a persisted VerificationPacket by packet_id (content-addressed, digest-verified)."""
+        from fastapi import HTTPException
+
+        pkt = pipeline.ledger.get_packet(packet_id)
+        if pkt is not None:
+            return pkt.to_dict()
+        # Distinguish not-found vs integrity failure
+        entry = pipeline.ledger.find_by_packet(packet_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="packet_id not found")
+        ok, msg = pipeline.ledger.verify_packet(packet_id)
+        # Missing or tampered → 404 with integrity detail (never 500)
+        raise HTTPException(status_code=404, detail=msg)
+
+    @app.get("/evidence/packets")
+    def list_evidence_packets() -> dict:
+        ids = pipeline.ledger.list_packet_ids()
+        return {"packet_ids": ids, "count": len(ids)}
+
+    @app.get("/evidence/packet/by-digest/{digest}")
+    def get_evidence_packet_by_digest(digest: str) -> dict:
+        from fastapi import HTTPException
+
+        pkt = pipeline.ledger.get_packet_by_digest(digest)
+        if pkt is None:
+            raise HTTPException(status_code=404, detail="packet digest not found or corrupted")
+        return pkt.to_dict()
+
     # ---------------- incidents ----------------
     @app.get("/incidents")
     def incidents() -> dict:

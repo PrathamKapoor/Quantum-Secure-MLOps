@@ -106,6 +106,11 @@ class Settings:
     def learning_path(self) -> Path:
         return self.home / "supervisor" / "learning.json"
 
+    @property
+    def packet_store_path(self) -> Path:
+        """Content-addressed packet bodies (F1) — co-located with ledger."""
+        return self.ledger_path.parent / "packets"
+
     def ensure_dirs(self) -> None:
         for p in (
             self.platform_dir,
@@ -114,6 +119,7 @@ class Settings:
             self.ledger_path.parent,
             self.registry_db_path.parent,
             self.learning_path.parent,
+            self.packet_store_path,
         ):
             p.mkdir(parents=True, exist_ok=True)
 

@@ -302,6 +302,39 @@ def audit_ledger(ctx):
     _dump({"chain_ok": ok, "message": msg, "head": head})
 
 
+@cli.command("audit-ledger-packets")
+@click.pass_context
+def audit_ledger_packets(ctx):
+    """Verify that every ledger-committed packet body is present and digest-matched (F1)."""
+    pipeline = ctx.obj["pipeline"]
+    ids = pipeline.ledger.list_packet_ids()
+    failures: list[dict] = []
+    for pid in ids:
+        ok, msg = pipeline.ledger.verify_packet(pid)
+        if not ok:
+            failures.append({"packet_id": pid, "ok": ok, "detail": msg})
+    _dump({"total_packets": len(ids), "failures": failures, "all_intact": len(failures) == 0})
+
+
+@cli.command("show-packet")
+@click.option("--packet-id", required=True, help="VerificationPacket ID to retrieve")
+@click.pass_context
+def show_packet(ctx, packet_id):
+    """Retrieve a persisted VerificationPacket by packet_id (F1)."""
+    pipeline = ctx.obj["pipeline"]
+    pkt = pipeline.ledger.get_packet(packet_id)
+    if pkt is not None:
+        _dump(pkt.to_dict())
+        return
+    entry = pipeline.ledger.find_by_packet(packet_id)
+    if entry is None:
+        _dump({"error": "packet_id not found", "packet_id": packet_id})
+        sys.exit(1)
+    ok, msg = pipeline.ledger.verify_packet(packet_id)
+    _dump({"error": msg, "packet_id": packet_id})
+    sys.exit(1)
+
+
 @cli.command()
 @click.option("--model", "model_name", required=True)
 @click.option("--artifact-digest", required=True)

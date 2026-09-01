@@ -421,3 +421,23 @@ N ✅ (doc distinguishes IMPLEMENTED / ENVIRONMENT-LIMITED)
 implemented, fail-closed semantics work, 61 HSM tests pass, software fallback remains
 correct, but physical HSM interoperability cannot be exercised on this Windows host
 (no SoftHSM2 / vendor library).  Full report: `docs/HSM_IMPLEMENTATION.md`.
+
+---
+
+# SESSION ADDENDUM — Workstream F1 (Evidence Packet Persistence)
+
+**Forensic question:** Evidence F1 — does the ledger’s promise of “immutable evidence for every operation” (packet.py, ARCHITECTURE.md, DELIVERABLE.md) require durable packet bodies, given that `EvidenceLedger.append_packet()` previously committed only 5 fields + digest and lost `security_checks`/`proofs`/`artifacts`/`metrics`?
+
+**Authority elevation:** `POST_ROADMAP_ENGINEERING_AUDIT.md:129` and `POST_ROADMAP_HARDENING_IMPLEMENTATION.md:5` deferred F1 as DOCUMENTED FUTURE (“out of scope”). Re-investigation shows the gap is a **hardening defect**: DELIVERABLE’s “Verification Packets: Immutable evidence” + ledger as “authoritative store” + packet creation in `registry.py:367` (with full proofs) are AUTHORITATIVE. The ledger hash commits to `packet.digest()` but without the preimage the commitment is unverifiable — an auditor cannot reconstruct *why* a decision was VERIFIED. Using the existing `ArtifactStore` content-addressed primitive, this is a small, safe, architecture-consistent fix (no new infra, no PostgreSQL).
+
+**Design (content-addressed, not embedded):** `VerificationPacket.to_dict()` → `canonical_json` → `sha3_hex` (packet.digest) → `ArtifactStore.put(canonical)` under `<home>/ledger/packets/<digest[:2]>/<digest>` → ledger entry `{type:verification_packet, packet_id, digest, objective, actor, decision}`; retrieval via `get_packet`/`get_packet_by_digest` digest-verified; `packet_id` unique (second append → `LedgerError` immutability); sensitive field names (`private_key`, `secret_key`, `hsm_pin`, `pin`, `passphrase`, `credential`) rejected fail-closed; `verify_chain` unchanged; old ledger entries remain readable (`get_packet` → `None`, `verify_packet` → “missing”).
+
+**Entry baseline:** 400 collected (368 prior + 32 F1), partitioned green, `compileall` clean, `demo` SUCCESS, `verify_chain` intact, 26 guardrailed_residue renames staged.
+
+**Exit state:** **400 collected, 32 new F1 tests, all partitions green, `compileall` clean, `demo` SUCCESS (30 entries), `verify_chain` intact, `audit-ledger-packets` all intact for new packets, API `GET /evidence/packet/{id}` + `GET /evidence/packets` + `GET /evidence/packet/by-digest/{d}` and CLI `show-packet`/`audit-ledger-packets` added.**
+
+**Implemented:** `qsmlops/evidence/ledger.py` (packet store, `append_packet` store-before-ledger, `get_packet*`, `verify_packet`, `list_packet_ids`, sensitive check, `_path_for` tamper vs missing distinction), `qsmlops/config.py:32` + `core/settings.py:110` `packet_store_path`, `qsmlops/api/app.py:387` evidence packet routes (404 not 500), `qsmlops/cli.py:305` `show-packet`/`audit-ledger-packets`, `tests/test_evidence_packet_persistence.py` (32), `docs/EVIDENCE_PACKET_PERSISTENCE.md`.
+
+**Tests:** 32 F1 (persistence 6, integrity 6, ledger 4, security 5, compatibility 2, integration 2, adversarial 7) — all green. No HSM regression.
+
+**Final status: COMPLETE** — packet persistence is AUTHORITATIVE hardening, implemented, content-addressed, digest-bound, immutable, tamper-detected, backward compatible, no secret leakage, no duplicate authority. Full report: `docs/EVIDENCE_PACKET_PERSISTENCE.md`.
