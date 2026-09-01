@@ -100,7 +100,7 @@ class TestApprovalCli:
         assert payload["approval"] == "DENIED"
         assert "refused" in payload["reason"].lower()
 
-    def test_legacy_approve_command_reports_denial_structurally(self, home):
+    def test_approve_and_deploy_command_reports_denial_structurally(self, home):
         trained = _train(home, model="legacy-denied")
         vid = trained["version_id"]
         _invoke(home, "verify", "--version-id", vid)
@@ -113,11 +113,37 @@ class TestApprovalCli:
 
         runner = home["runner"]
         result = runner.invoke(
-            cli, ["approve", "--version-id", vid], catch_exceptions=False
+            cli, ["approve-and-deploy", "--version-id", vid], catch_exceptions=False
         )
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload.get("approval") == "DENIED" or payload.get("approved") is False
+
+    def test_deprecated_approve_alias_warns_and_deploys(self, home):
+        """C4: the deprecated `approve` alias still works (legacy behaviour)
+        but emits a deprecation warning on stderr."""
+        trained = _train(home, model="alias-deploy")
+        vid = trained["version_id"]
+        _invoke(home, "verify", "--version-id", vid)
+
+        runner = home["runner"]
+        result = runner.invoke(
+            cli, ["approve", "--version-id", vid], catch_exceptions=False
+        )
+        # Warning is on stderr; the JSON result is on stdout (pretty-printed
+        # across multiple lines). Reconstruct the JSON by dropping the
+        # deprecation warning line.
+        assert "deprecated" in result.output
+        json_lines = [
+            line for line in result.output.splitlines()
+            if not line.strip().startswith("WARNING")
+        ]
+        payload = json.loads("\n".join(json_lines))
+        assert payload.get("approved") is True
+        # The alias performs a real deploy: the version reaches DEPLOYED.
+        listing = _invoke(home, "registry")
+        deployed = [v for v in listing["versions"] if v["version_id"] == vid]
+        assert deployed and deployed[0]["state"] == "DEPLOYED"
 
 
 class TestRegistryCli:
