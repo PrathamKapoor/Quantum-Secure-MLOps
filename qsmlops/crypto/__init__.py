@@ -24,6 +24,8 @@ from qsmlops.crypto.hsm import (
     HSMSignatureError,
     HSMOperationError,
     HSMKeyImportError,
+    HSMConfigurationError,
+    HSMMechanismError,
 )
 
 __all__ = [
@@ -35,4 +37,5 @@ __all__ = [
     "HSMKeyInfo", "HSMError", "HSMUnavailableError", "HSMAuthenticationError",
     "HSMKeyNotFoundError", "HSMKeyRevokedError", "HSMUnsupportedMechanismError",
     "HSMSessionError", "HSMSignatureError", "HSMOperationError", "HSMKeyImportError",
+    "HSMConfigurationError", "HSMMechanismError",
 ]

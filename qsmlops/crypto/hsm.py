@@ -97,6 +97,16 @@ class HSMKeyImportError(HSMError):
     pass
 
 
+class HSMConfigurationError(HSMUnavailableError):
+    """HSM configuration invalid (alias for unavailable with config context)."""
+    pass
+
+
+class HSMMechanismError(HSMUnsupportedMechanismError):
+    """Alias for mechanism-unsupported (mandate naming)."""
+    pass
+
+
 # PKCS#11 Mechanism Constants (kept for backward compat)
 CKM_ML_DSA_44 = 0x00002000
 CKM_ML_DSA_65 = 0x00002001
@@ -467,10 +477,17 @@ def _resolve_hsm_config(config: dict[str, Any]) -> dict[str, Any]:
     if isinstance(library_path, str) and library_path.strip().lower() == "mock":
         mock = True
         library_path = None
+    # slot_id parsing — fail gracefully for malformed values (adversarial)
+    parsed_slot: int | None = None
+    if slot_id is not None and str(slot_id).strip() != "":
+        try:
+            parsed_slot = int(str(slot_id).strip())
+        except (ValueError, TypeError):
+            raise HSMConfigurationError(f"invalid slot_id {slot_id!r}: must be integer")
     return {
         "library_path": library_path,
         "token_label": token_label,
-        "slot_id": int(slot_id) if slot_id is not None and str(slot_id).strip() != "" else None,
+        "slot_id": parsed_slot,
         "pin": str(pin) if pin is not None else None,
         "so_pin": str(so_pin) if so_pin is not None else None,
         "mock": mock,
@@ -1305,14 +1322,15 @@ def create_hsm_backend(config: dict[str, Any]) -> "HSMBackend":
     """Factory function to create the appropriate HSM backend.
 
     Fail-closed semantics:
-      - ``use_hsm=False`` (default) → :class:`SoftwareFallbackBackend`
-      - ``use_hsm=True``  → :class:`PKCS11Backend`; if the HSM cannot be
-        initialized the error is propagated — never silently returns software
-        fallback.
+      - ``use_hsm=False`` (default) and ``backend`` not pkcs11/hsm → :class:`SoftwareFallbackBackend`
+      - ``use_hsm=True`` or ``backend in ('pkcs11','hsm')`` → :class:`PKCS11Backend`;
+        if the HSM cannot be initialized the error is propagated — never silently
+        returns software fallback.
 
     Args:
         config: Configuration dictionary with keys:
             - use_hsm: bool - Whether to use HSM (default: False)
+            - backend: str - Alternative selector ("software" | "pkcs11" | "hsm")
             - hsm_library_path / library_path: Path to PKCS#11 library
             - hsm_token_label / token_label: Token label
             - hsm_slot_id / slot_id: Slot ID (optional)
@@ -1323,10 +1341,25 @@ def create_hsm_backend(config: dict[str, Any]) -> "HSMBackend":
         HSMBackend instance
 
     Raises:
-        HSMUnavailableError, HSMAuthenticationError, etc. — when ``use_hsm=True``
-        and the HSM cannot be initialized.
+        HSMUnavailableError, HSMAuthenticationError, etc. — when HSM is
+        explicitly requested and the HSM cannot be initialized.
     """
-    if not config.get("use_hsm", False):
+    # Deterministic explicit-HSM request: use_hsm=True OR backend=pkcs11/hsm
+    backend_sel = str(config.get("backend", "")).strip().lower()
+    explicit_hsm = bool(config.get("use_hsm", False)) or backend_sel in ("pkcs11", "hsm")
+    # Explicit software request (overrides use_hsm absence)
+    explicit_software = backend_sel in ("software", "fallback")
+    if explicit_hsm and not config.get("use_hsm", False) and backend_sel in ("pkcs11", "hsm"):
+        # backend=pkcs11 implies use_hsm
+        explicit_hsm = True
+    if explicit_hsm and explicit_software:
+        # Contradictory — treat as HSM request (fail-closed) and surface config error via HSM path
+        pass
+    if not explicit_hsm:
+        # Implicit/default → software (explicit software also lands here if not HSM)
+        if backend_sel and backend_sel not in ("software", "fallback", ""):
+            # Unknown backend value — fail closed if HSM-like
+            raise HSMConfigurationError(f"unknown backend {backend_sel!r}")
         return SoftwareFallbackBackend(config)
 
     backend = PKCS11Backend(config)
