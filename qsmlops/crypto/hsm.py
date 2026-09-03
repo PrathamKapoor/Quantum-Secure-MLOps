@@ -535,6 +535,8 @@ class PKCS11Backend(HSMBackend):
         self._last_error: str | None = None
         # Library description for health
         self._library_description: str | None = None
+        # Cached mechanism set (populated lazily in real mode)
+        self._supported_mechs_cache: set[Any] | None = None
 
     def __repr__(self) -> str:
         # Redact PINs from repr to avoid secret leakage in logs
@@ -787,6 +789,81 @@ class PKCS11Backend(HSMBackend):
         info = self._keys.get(key_id)
         if info is not None and info.status == "revoked":
             raise HSMKeyRevokedError(f"Key {key_id} is revoked")
+
+    def _algorithm_to_mechanism(self, algorithm: str) -> Any:
+        """Map an algorithm name to the PKCS#11 Mechanism constant used for
+        sign/verify.  Raises HSMUnsupportedMechanismError for algorithms not
+        representable on a PKCS#11 token (e.g. ML-KEM).
+        """
+        if algorithm in _SUPPORTED_SIG_ALGS:
+            from pkcs11 import Mechanism  # type: ignore
+            # All QSMLOps signature algorithms map to Mechanism.ML_DSA in PKCS#11
+            return Mechanism.ML_DSA
+        if algorithm in ("ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"):
+            raise HSMUnsupportedMechanismError(
+                f"Algorithm {algorithm!r} (KEM) not sign/verify-compatible in PKCS#11 backend"
+            )
+        raise HSMUnsupportedMechanismError(f"Algorithm {algorithm!r} not supported by HSM backend")
+
+    def _supported_mechanisms(self) -> set[Any]:
+        """Return the set of mechanisms advertised by the real token.  Empty
+        for mock backends.  Cached after first successful read.
+        """
+        if self._mock:
+            # Mock advertises ML-DSA explicitly via _map_alg_to_param_set path;
+            # for sign/verify preflight we declare ML_DSA available.
+            from pkcs11 import Mechanism  # type: ignore
+            return {Mechanism.ML_DSA}
+        if self._token is None:
+            return set()
+        if self._supported_mechs_cache is not None:
+            return self._supported_mechs_cache
+        slot = getattr(self._token, "slot", None)
+        mechs: set[Any] = set()
+        try:
+            if slot is not None:
+                mechs = set(slot.get_mechanisms())
+        except Exception:
+            mechs = set()
+        self._supported_mechs_cache = mechs
+        return mechs
+
+    def _require_mechanism(self, mechanism: Any, operation: str = "use") -> None:
+        """Fail closed when the token does not advertise a mechanism."""
+        if self._mock:
+            return
+        supported = self._supported_mechanisms()
+        if not supported:
+            # Cannot determine — be conservative and refuse
+            raise HSMUnsupportedMechanismError(
+                f"Mechanism enumeration unavailable; cannot confirm {operation} support"
+            )
+        if mechanism not in supported:
+            name = getattr(mechanism, "name", str(mechanism))
+            raise HSMUnsupportedMechanismError(
+                f"Mechanism {name} not advertised by token (cannot {operation})"
+            )
+
+    def _find_object(self, key_id: str, obj_class: Any) -> Any:
+        """Resolve a single PKCS#11 object by ``key_id`` filtered by
+        :class:`ObjectClass`.  Raises :class:`HSMKeyNotFoundError` on
+        ambiguity or absence.  Never silently substitutes a different class.
+        """
+        from pkcs11 import Attribute  # type: ignore
+        from pkcs11.exceptions import MultipleObjectsReturned  # type: ignore
+        if self._session is None:
+            raise HSMUnavailableError("No active PKCS#11 session")
+        objs = list(self._session.get_objects({
+            Attribute.ID: key_id.encode(),
+            Attribute.CLASS: obj_class,
+        }))
+        if not objs:
+            raise HSMKeyNotFoundError(f"{obj_class} {key_id} not found on token")
+        if len(objs) > 1:
+            raise HSMKeyNotFoundError(
+                f"{obj_class} {key_id} returned {len(objs)} matches (expected 1)"
+            )
+        return objs[0]
 
     # -- key management -------------------------------------------------
 
@@ -1051,27 +1128,28 @@ class PKCS11Backend(HSMBackend):
             # Try to query HSM directly (real mode)
             if not self._mock and self._session is not None:
                 try:
-                    from pkcs11 import Attribute  # type: ignore
-                    # Search for key by ID
-                    try:
-                        obj = self._session.get_key(id=key_id.encode())
-                        # If we have a key, synthesize info from local cache if present; else fabricate minimal
-                        label = getattr(obj, "label", key_id)
-                        # Try to determine algorithm from key_type
-                        algo = info.algorithm if info else "unknown"
-                        return HSMKeyInfo(
-                            key_id=key_id,
-                            label=str(label),
-                            algorithm=str(algo),
-                            key_type="signature",
-                            public_key_hex="",
-                            created_at=time.time(),
-                            owner="",
-                            status="active",
-                            hsm_object_handle=getattr(obj, "handle", None),
-                        )
-                    except Exception:
-                        pass
+                    from pkcs11 import ObjectClass  # type: ignore
+                    pub_obj = self._find_object(key_id, ObjectClass.PUBLIC_KEY)
+                    label = getattr(pub_obj, "label", key_id)
+                    # Use cached algorithm if available, else "unknown"
+                    algo = "unknown"
+                    for v in self._keys.values():
+                        if v.key_id == key_id:
+                            algo = v.algorithm
+                            break
+                    return HSMKeyInfo(
+                        key_id=key_id,
+                        label=str(label),
+                        algorithm=str(algo),
+                        key_type="signature",
+                        public_key_hex="",
+                        created_at=time.time(),
+                        owner="",
+                        status="active",
+                        hsm_object_handle=getattr(pub_obj, "handle", None),
+                    )
+                except HSMKeyNotFoundError:
+                    raise
                 except Exception:
                     pass
             raise HSMKeyNotFoundError(f"Key not found: {key_id}")
@@ -1084,8 +1162,8 @@ class PKCS11Backend(HSMBackend):
             # Try to fetch from HSM object
             if not self._mock and self._session is not None:
                 try:
-                    obj = self._session.get_key(id=key_id.encode())
-                    from pkcs11 import Attribute  # type: ignore
+                    from pkcs11 import Attribute, ObjectClass  # type: ignore
+                    obj = self._find_object(key_id, ObjectClass.PUBLIC_KEY)
                     for attr in (Attribute.VALUE, Attribute.EC_POINT):
                         try:
                             v = obj[attr]
@@ -1093,6 +1171,8 @@ class PKCS11Backend(HSMBackend):
                                 return bytes(v)
                         except Exception:
                             continue
+                except HSMKeyNotFoundError:
+                    raise
                 except Exception as exc:
                     raise HSMKeyNotFoundError(f"Key not found: {key_id}") from exc
             raise HSMKeyNotFoundError(f"Key not found: {key_id}")
@@ -1146,14 +1226,15 @@ class PKCS11Backend(HSMBackend):
             status="revoked",
             hsm_object_handle=info.hsm_object_handle,
         )
-        # In real HSM, also destroy object
+        # In real HSM, also destroy object(s) with this id across both key classes
         if not self._mock and self._session is not None:
             try:
-                obj = self._session.get_key(id=key_id.encode())
-                try:
-                    obj.destroy()
-                except Exception:
-                    pass
+                from pkcs11 import Attribute  # type: ignore
+                for obj in list(self._session.get_objects({Attribute.ID: key_id.encode()})):
+                    try:
+                        obj.destroy()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         # Zeroize private material in mock (best effort)
@@ -1203,23 +1284,41 @@ class PKCS11Backend(HSMBackend):
 
         # Real HSM signing via PKCS#11 private key object
         try:
-            from pkcs11 import Attribute  # type: ignore
-            # Locate private key object
+            from pkcs11 import Attribute, ObjectClass  # type: ignore
+            from pkcs11.exceptions import (  # type: ignore
+                PKCS11Error,
+                MechanismInvalid,
+                MechanismParamInvalid,
+                SignatureInvalid,
+                SignatureLenRange,
+                MultipleObjectsReturned,
+                ObjectHandleInvalid,
+            )
+
+            mechanism = self._algorithm_to_mechanism(info.algorithm)
+            self._require_mechanism(mechanism, operation="sign")
+
             try:
-                priv_obj = self._session.get_key(
-                    id=key_id.encode(),
+                priv_obj = self._find_object(
+                    key_id,
+                    ObjectClass.PRIVATE_KEY,
                 )
-                # Ensure it's a private key (filter by class if needed)
-                # pkcs11 get_key returns Key; check object_class
+            except HSMKeyNotFoundError:
+                raise
             except Exception as exc:
                 raise HSMKeyNotFoundError(f"Private key {key_id} not found on token: {exc}") from exc
 
             # Perform signing. Default mechanism for ML_DSA is Mechanism.ML_DSA
             try:
-                # The sign method is provided by SignMixin
-                sig = priv_obj.sign(message)
+                sig = priv_obj.sign(message, mechanism=mechanism)
                 return bytes(sig)
-            except Exception as exc:
+            except (MechanismInvalid, MechanismParamInvalid) as exc:
+                raise HSMUnsupportedMechanismError(
+                    f"Signing mechanism for {info.algorithm} not supported by token: {exc}"
+                ) from exc
+            except (SignatureInvalid, SignatureLenRange) as exc:
+                raise HSMSignatureError(f"HSM signature invalid: {exc}") from exc
+            except PKCS11Error as exc:
                 name = type(exc).__name__
                 if "Mechanism" in name or "NotSupported" in name:
                     raise HSMUnsupportedMechanismError(f"Signing mechanism not supported: {exc}") from exc
@@ -1252,35 +1351,49 @@ class PKCS11Backend(HSMBackend):
 
         # Real HSM verification: try token public key, fall back to software
         try:
-            from pkcs11 import Attribute  # type: ignore
+            from pkcs11 import Attribute, ObjectClass  # type: ignore
+            from pkcs11.exceptions import (  # type: ignore
+                PKCS11Error,
+                MechanismInvalid,
+                MechanismParamInvalid,
+                SignatureInvalid,
+                SignatureLenRange,
+                MultipleObjectsReturned,
+                ObjectHandleInvalid,
+            )
+
+            mechanism = self._algorithm_to_mechanism(info.algorithm)
             try:
-                pub_obj = self._session.get_key(id=key_id.encode())
-                try:
-                    result = pub_obj.verify(message, signature)
-                    # pub_obj.verify returns True/False or raises on invalid?
-                    # In pkcs11.types VerifyMixin, verify returns bool or raises SignatureInvalid
-                    if isinstance(result, bool):
-                        return result
-                    return True
-                except Exception as vexc:
-                    name = type(vexc).__name__
-                    if name in ("SignatureInvalid", "SignatureLenRange"):
-                        return False
-                    # Fall back to software verification
-                    pub = self._public_keys.get(key_id)
-                    if pub is not None:
-                        provider = SIGNATURE_PROVIDERS.get(info.algorithm)
-                        if provider is not None:
-                            return bool(provider.verify(pub, message, signature))
-                    return False
-            except Exception:
-                # Fall back to software
+                pub_obj = self._find_object(key_id, ObjectClass.PUBLIC_KEY)
+            except HSMKeyNotFoundError:
+                # Fall back to software verification if we have public key cached
                 pub = self._public_keys.get(key_id)
                 if pub is not None:
                     provider = SIGNATURE_PROVIDERS.get(info.algorithm)
                     if provider is not None:
                         return bool(provider.verify(pub, message, signature))
-                raise HSMKeyNotFoundError(f"Key not found for verification: {key_id}")
+                raise
+
+            try:
+                result = pub_obj.verify(message, signature, mechanism=mechanism)
+                if isinstance(result, bool):
+                    return result
+                return True
+            except (SignatureInvalid, SignatureLenRange):
+                return False
+            except (MechanismInvalid, MechanismParamInvalid):
+                # Token does not support the mechanism — fail closed at the
+                # HSM boundary (do not silently substitute software).
+                raise HSMUnsupportedMechanismError(
+                    f"Verification mechanism for {info.algorithm} not supported by token"
+                )
+            except PKCS11Error as exc:
+                name = type(exc).__name__
+                if name in ("SignatureInvalid", "SignatureLenRange"):
+                    return False
+                if "Mechanism" in name or "NotSupported" in name:
+                    raise HSMUnsupportedMechanismError(f"Verification mechanism not supported: {exc}") from exc
+                raise HSMOperationError(f"HSM verification failed: {name}: {exc}") from exc
         except HSMError:
             raise
         except Exception as exc:
