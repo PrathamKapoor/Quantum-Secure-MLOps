@@ -10,4 +10,6 @@ __pycache__/
 #   powershell -ExecutionPolicy Bypass -File scripts/bootstrap_softhsm2.ps1
 .devtools/softhsm2/bin/
 .devtools/softhsm2/lib/
-.devtools/softhsm2/share/doc/
+.devtools/softhsm2/share/
+.devtools/softhsm2/etc/
+.devtools/softhsm2/README.txt
