@@ -1,0 +1,33 @@
+# A1.2 real-provider execution evidence
+REAL_PROVIDER_EXECUTED = YES
+Total recorded events: 19
+Executed-real events:  19
+Skipped events:        0
+Failed events:         0
+
+Library path: C:\Projects\Quantum-Secure_Agentic_MLOps_Pipeline_Management_System\.devtools\softhsm2\lib\softhsm2-x64.dll
+Token label:  qsmlops-a12-dev
+Config file:  C:\Users\LENOVO\AppData\Local\Temp\qsmlops-a12-softhsm2.conf
+Prereq ready: YES
+Prereq note:  ready
+
+## Events
+- [executed_real] R1: loaded library: Implementation of PKCS11
+- [executed_real] R2: found token label='qsmlops-a12-dev' serial=b'0dbcd613ee8d0100'
+- [executed_real] R2.slot: 2 slots present, at least one with token
+- [executed_real] R3.wrong: wrong PIN raised PinIncorrect
+- [executed_real] R3.correct: real backend initialized with correct PIN
+- [executed_real] R4: 68 mechanisms; ML-DSA absent (consistent with §11)
+- [executed_real] R5: EC P-256 keypair (id=b'a12-test-r5-ec-077c9e6a') generated, rediscovered, signed & verified
+- [executed_real] R6: ML-DSA generation correctly failed-closed against real SoftHSM2
+- [executed_real] R7: backend session produced ECDSA sig len=64; tamper rejected
+- [executed_real] R8: key created in R5 (b'a12-test-r5-ec-077c9e6a') rediscovered (token persistence)
+- [executed_real] R8.process: key b'a12-test-r5-ec-077c9e6a' rediscovered in fresh Python process (1 matches)
+- [executed_real] E1: create_hsm_backend returned PKCS11Backend; health: 'Implementation of PKCS11 — HSM operational but ML-DSA not ad'
+- [executed_real] E2: KeyStore correctly routes ML-DSA generation through real HSM and fails closed
+- [executed_real] F2: invalid library path → HSMUnavailableError
+- [executed_real] F1: missing library → HSMUnavailableError
+- [executed_real] F4: unknown token label → HSMUnavailableError
+- [executed_real] F5: login failure → HSMAuthenticationError
+- [executed_real] F7: ML-DSA mechanism → HSMUnsupportedMechanismError
+- [executed_real] F6: missing key → HSMKeyNotFoundError
