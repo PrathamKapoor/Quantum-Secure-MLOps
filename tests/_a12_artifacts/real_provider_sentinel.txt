@@ -18,11 +18,11 @@ Prereq note:  ready
 - [executed_real] R3.wrong: wrong PIN raised PinIncorrect
 - [executed_real] R3.correct: real backend initialized with correct PIN
 - [executed_real] R4: 68 mechanisms; ML-DSA absent (consistent with §11)
-- [executed_real] R5: EC P-256 keypair (id=b'a12-test-r5-ec-077c9e6a') generated, rediscovered, signed & verified
+- [executed_real] R5: EC P-256 keypair (id=b'a12-test-r5-ec-93cb8057') generated, rediscovered, signed & verified
 - [executed_real] R6: ML-DSA generation correctly failed-closed against real SoftHSM2
 - [executed_real] R7: backend session produced ECDSA sig len=64; tamper rejected
-- [executed_real] R8: key created in R5 (b'a12-test-r5-ec-077c9e6a') rediscovered (token persistence)
-- [executed_real] R8.process: key b'a12-test-r5-ec-077c9e6a' rediscovered in fresh Python process (1 matches)
+- [executed_real] R8: key created in R5 (b'a12-test-r5-ec-93cb8057') rediscovered (token persistence)
+- [executed_real] R8.process: key b'a12-test-r5-ec-93cb8057' rediscovered in fresh Python process (1 matches)
 - [executed_real] E1: create_hsm_backend returned PKCS11Backend; health: 'Implementation of PKCS11 — HSM operational but ML-DSA not ad'
 - [executed_real] E2: KeyStore correctly routes ML-DSA generation through real HSM and fails closed
 - [executed_real] F2: invalid library path → HSMUnavailableError
