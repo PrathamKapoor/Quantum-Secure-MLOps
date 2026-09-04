@@ -1,2 +1,0 @@
-'''Capability descriptors for agents.'''
-\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import List\n\n\n@dataclass\nclass Capability:\n    name: str\n    description: str\n\n\n@dataclass\nclass AgentCapabilities:\n    capabilities: List[Capability]\n

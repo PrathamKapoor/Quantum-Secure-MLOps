@@ -1,2 +1,0 @@
-'''Cryptographic policy definitions.'''
-\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass CryptoPolicy:\n    allowed_algorithms: list[str]\n    key_rotation_interval_days: int\n

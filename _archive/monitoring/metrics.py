@@ -1,2 +1,0 @@
-'''Metric collection interfaces.'''
-\nfrom __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Any, Dict\n\n\n@dataclass\nclass Metric:\n    name: str\n    value: Any\n    tags: Dict[str, str] = None\n\n\nclass MetricsCollector:\n    def __init__(self) -> None:\n        self._metrics: list[Metric] = []\n\n    def record(self, metric: Metric) -> None:\n        self._metrics.append(metric)\n\n    def get_all(self) -> list[Metric]:\n        return self._metrics\n

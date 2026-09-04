@@ -1,4 +1,0 @@
-'''Identity service handling creation, lookup and verification.'''
-\nfrom __future__ import annotations\n\nimport uuid\nfrom typing import Dict, Optional\n\nfrom .models import Identity, HumanIdentity, ServiceIdentity, AgentIdentity\n\n\nclass IdentityService:\n    def __init__(self) -> None:\n        self._store: Dict[str, Identity] = {}
-\n    def create_identity(self, identity: Identity) -> str:\n        """Store a new identity and return its identifier."""
-        identity_id = uuid.uuid4().hex\n        identity.id = identity_id\n        self._store[identity_id] = identity\n        return identity_id\n\n    def get_identity(self, identity_id: str) -> Optional[Identity]:\n        return self._store.get(identity_id)\n\n    def verify_credentials(self, identity_id: str, credential_blob: bytes) -> bool:\n        # Placeholder – real implementation would verify signatures / tokens\n        return identity_id in self._store\n

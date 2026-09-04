@@ -1,3 +1,0 @@
-'''Simple in‑process event bus.'''
-\nfrom __future__ import annotations\n\nfrom typing import Callable, Dict, List\n\n\nclass EventBus:\n    def __init__(self) -> None:\n        self._subscribers: Dict[str, List[Callable[[Any], None]]] = {}
-\n    def subscribe(self, event_type: str, handler: Callable[[Any], None]) -> None:\n        self._subscribers.setdefault(event_type, []).append(handler)\n\n    def publish(self, event_type: str, payload: Any) -> None:\n        for handler in self._subscribers.get(event_type, []):\n            handler(payload)\n

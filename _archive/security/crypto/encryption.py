@@ -1,2 +1,0 @@
-'''Encryption service interface placeholder.'''
-\nfrom __future__ import annotations\n\n\nclass EncryptionService:\n    def encrypt(self, data: bytes, key_id: str) -> bytes:\n        raise NotImplementedError\n\n    def decrypt(self, ciphertext: bytes, key_id: str) -> bytes:\n        raise NotImplementedError\n
